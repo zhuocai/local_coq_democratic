@@ -99,7 +99,6 @@ Theorem add_switch1:
     forall x:nat, forall y:nat, forall z:nat, 
         x + y + z = x + z + y .
     intros.
-    split.
     rewrite add_reflx.
     rewrite add_asso.
     rewrite add_reflx.
@@ -109,13 +108,19 @@ Theorem add_switch1:
     rewrite H.
     rewrite add_reflx.
     trivial.
-    rewrite add_reflx.
-    rewrite add_asso.
-    reflexivity.
     
 Qed.
 
-Theorem 
+Theorem add_switch2:
+    forall x:nat, forall y:nat, forall z:nat, 
+        x + y + z = z + x + y.
+Proof.
+    intros.
+    rewrite add_reflx.
+    rewrite add_asso.
+    trivial.
+
+Qed.
 
 
 Lemma mul_reflx1:
@@ -187,11 +192,35 @@ Theorem mul_dist:
         rewrite H.
         rewrite add_asso.
         assert (y+x*S y + (z+x*z) = y+z + x*S y + x*z).
-        
-
-
-
+        rewrite add_asso.
+        assert (y + x*S y + z = y + z + x*S y).
+        rewrite add_switch1.
+        trivial.
+        rewrite H0.
+        trivial.
+        rewrite H0.
+        trivial.
 Qed.
+
+Theorem mul_dist2: 
+    forall x:nat, forall y:nat, forall z:nat, 
+        (y+z)*x = y*x + z*x.
+        intros.
+        assert ((y+z)*x = x*(y+z)).
+        rewrite mul_reflx.
+        trivial.
+        rewrite H.
+        rewrite mul_dist.
+        assert (x*y = y*x).
+        rewrite mul_reflx.
+        trivial.
+        rewrite H0.
+        assert (x*z = z*x).
+        rewrite mul_reflx.
+        trivial.
+        rewrite H1.
+        trivial.
+Qed. 
 
 
 Theorem mul_asso:
@@ -208,38 +237,31 @@ Theorem mul_asso:
         simpl.
         rewrite mul_reflx.
         reflexivity. (* y = 0 complete *)
-        assert (S x * (S y * z) = (S y*z) + x * (S y *z)).
+        simpl.
+        assert ((y + x * S y) * z = y*z + x*S y * z).
+        rewrite mul_dist2.
         reflexivity.
         rewrite H.
-        assert (S y *z + x * (S y * z) = S y *z + (x * S y) * z).
         rewrite IHx.
+        simpl.  
+        rewrite add_asso.
         reflexivity.
-        rewrite H0.
-        simpl.
-
-
-
 Qed.
-
-
-
-Hypothesis mul_dist_hypo:
-    forall x:nat, forall y:nat, forall z:nat, 
-        x*(y+z) =x*y + x*z.
 
 Theorem prop_doublesum :
     forall xs: list nat, 
         sum_list (map double xs) = double (sum_list xs).
         intros.
         induction xs.
-        constructor.
+        trivial. (* xs = [] done *)
         simpl.
+        rewrite IHxs.
         unfold double.
-        unfold double in IHxs.
-        rewrite -> IHxs.
-        rewrite -> mul_dist_hypo.
-        reflexivity. 
-         
+        rewrite add_switch1.
+        rewrite add_asso.
+        rewrite add_asso.
+        rewrite add_switch1.
+        reflexivity.
 Qed. 
 
 

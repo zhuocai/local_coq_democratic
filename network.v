@@ -42,15 +42,6 @@ Inductive msgcontent : Type :=
 Inductive message : Type := 
   | msg (sender: person) (recipient: person)(content: msgcontent)(time: nat).
 
-Inductive Stage : Type :=
-  | receiving_proposals (* waiting to receive aggregate block from block proposers, lasts for web_time+delta. ends at t0 *)
-  | sending_local_winner (* t0~t0+delta *)
-  | receiving_local_winner  (* t0+delta ~ t0+2*delta*)
-  | leader_propose (* committee leader starts proposing a winner, t0+2*delta ~ t0+3*delta *) 
-  | receive_from_leader (* t0+3*delta ~ t0+4*delta *)
-  | blame (* 2*delta after receiving_from_leader. This might overlap with the above stages *)
-  | new_leader. 
-
 (* List of signed incomingMessages and outgoingMessages of each person *)
 Variable incomingMessages : person -> list message.
 Variable outgoingMessages : person -> list message.
@@ -63,7 +54,6 @@ currentSlot p t is the slot from the point-of-view of person p at time t
  *)
 Variable currentSlot : person -> nat -> nat.
 
-Variable currentStage : person -> nat -> Stage. 
 (* the current HotStuff round *)
 Variable currentRound : person -> nat -> nat. 
 
@@ -71,20 +61,26 @@ Variable currentRound : person -> nat -> nat.
 (* enterSlotTimers person slot = time to enter the slot. 
 Define t0 = enterSlotTimers+delta. t0 is the time that committee members stop receiving proposals from block proposers. 
  *)
-Variable enterSlotTimers: person->nat->nat.  
+Variable enterSlotTime: person->nat->nat.  
+
+Definition lockLocalWinnerTime (a:person)(slot:nat):nat := 
+  (enterSlotTime a slot) + web_time + delta.
 
 (* time in slot t and round r that a committee member receives the leader proposal *)
-Variable leaderProposalTimers: person->nat->nat->nat. 
+Variable receiveLeaderProposalTime: person->nat->nat->nat. 
 
 (* time in slot t and round r, that a committee member sends its acknowledge message *)
-Variable precommitTimers: person->nat->nat->nat. 
+Variable precommitTime: person->nat->nat->nat. 
 
 (* time in slot t and round r, that a committee member quits the previous round r-1 *)
-Variable newRoundTimers: person->nat->nat->nat. 
+Variable roundStartTime: person->nat->nat->nat. 
 
 
-(* *)
-Variable maxLocalWinner: person->nat->(prod block nat). 
+(* For player p, in slot s, round r, the aggregatedProposal it receives by lockLocalWinnerTime p s, in the form of block, weight *)
+Variable LocalWinner: person->nat->nat->(prod block weight). 
+
+(* For player p, in slot s, round r, the max aggregatedProposal it receives from localWinners of all committee members. *)
+Variable maxLocalWinnerLeader: person->nat->nat->(prod block weight). 
 
 (*Current slot can only increase by 1 if you are honest*)
 Hypothesis incrementalSlot : forall a: person, isHonest a = true ->
@@ -184,7 +180,45 @@ Hypothesis blockAddition:
   blockchain a s = b ->
   hasCertificateFromMajority a t b.
   
+(* 
 
+General Note: 
+
+1. specify the communication of the protocol. 
+
+- (localWinner) In each slot, all committee members receive an aggregated proposal from block proposers by lockLocalWinnerTime.
+- (send localWinner) In each slot, all honest committee members send their local winner to all committee members at time lockLocalWinnerTime. And they do not send local winner at any other time, or duplicate local winner for one slot.
+- (leaderProposal r0) In each slot, the round-0 honest leader sends the largest local winner to all committee members at time lockLocalWinnerTime + 2*delta.
+- (leaderProposal receive r0) In each slot, in round 0, honest committee member should receive the leader proposal during [lockLocalWinnerTime+delta, lockLocalWinnerTime+4*delta].  
+- (leaderProposal receive r1) In each slot, in round r>=1, honest committee member should receive leader proposal during [round_t(r) + XXX, round_t(r) + XXX]. 
+- (leaderProposal forward) In each slot, in each round, if honest committee member receives a leader proposal, forward it to all other committee members. 
+- (leaderProposal Timer) In each slot, in each round, if honest committee member receives a leader proposal on time, for the first time, and valid, set receiveLeaderProposalTime. 
+- (blame) Slot s, Round r. If leader proposal not received at time leaderProposalTime + 2*delta, blame (s, r).
+- (new-leader request) Slot s, Round r. If leader proposal conflict | majority blame (s,r) | receive new-leader request => new-leader (s,r, type1 | type2)
+- (acknowledge - precommit Timer). Slot s, round r, time leaderProposalTime + 2*delta: if honest, broadcast acknowledge (s, r, proposal).   
+- (acknowledge forward) In each slot, in each round, if honest committee member receives an acknowledge message, forward it to all other committee members.
+- (certify) receive >n/2 acknowledge messages by precommitTime+2*delta => certify block.
+- (new-leader quit-view) Happen at new-leader request. set new view time.
+- (new-leader wait) wait for 2*delta? pick highest certified block. lock and send to all committee members. Reason for wait: if any honest member locks on a certified block => honest leader knows it in collect. 
+- (new-leader forward) after waiting, send it. [newViewTime + 2*delta] already. 
+- (next Leader collect-wait) waits for 2*delta more time. [newViewTime + 4*delta]. suppose an honest member h locks on a certified block in prev_view at t. Then nextleader l can know it at t+delta. t = newViewTime_h + 2*delta. t+delta - (newViewTime_l + 2*delta) in worst case can reach 2*delta. 
+- (next Leader propose)
+
+
+
+
+2. Important properties to prove. 
+- In slot 0, all honest players start with the same genesis block, and enterSlot at the same time 0.
+- In each slot s>=1, if the first honest player to enterSlot s at time t, because of block bl => all honest players will enter slot s by time t+delta, with the same block bl. 
+- Extension (Liveness): if an honest player enters slot t at time t, then all honest players enter slot t+1 by time t+DDelta. DDelta = web_time + commitee_member * round_time. 
+
+
+3. Assumptions:
+- Synchrony: if a sends a message to b, b will receive it with delay at most delta
+- Honest majority: in every slot, the majority of committee members are honest. 
+- In every slot, At least one block proposer is honest => all committee members at least receive one valid block proposal with aggregated votes.
+
+ *)
 
 
 (* Real hypothesis: in every slot, the majority of committee members are honest *)
@@ -192,32 +226,6 @@ Hypothesis honestMajorityCommittee:
   forall slot:nat, forall a:person, 
     2 * length (filter isHonest (currentCommittee a slot)) > length (currentCommittee a slot).
 
-(* Sync HotStuff, require stages in slot*) 
-
-Hypothesis hotstuffStages_init:
-  forall a:person, forall t: nat, forall t1:nat, 
-  In a (currentCommittee a (currentSlot a t)) -> 
-  currentSlot a t = (currentSlot a t-1) + 1 ->
-  (t1>=t /\ t1<t+web_time+delta -> currentStage a t1 = receiving_proposals) /\ 
-(*It enters current slot at time t, another person might enter at time t+delta, and finish by t+delta+web_time*)
-  (t1>=t+web_time+delta /\ t1<t+web_time+2*delta -> currentStage a t1 = sending_local_winner) /\ 
-(* actually sending at time t+web_time+delta*)
-  (t1>=t+web_time+2*delta /\ t1<t+web_time+3*delta -> currentStage a t1 = receiving_local_winner) /\
-  (*let t0 = t+web_time+delta. This is the time that local person sends its local winner.
-   by t0+delta, all others have sent their local winners. by t0+2*delta, it (leader) receives all local winners.
-  Therefore, leader proposes winner at time t0+2*delta*)
-  (t1>=t+web_time+3*delta /\ t1<t+web_time+4*delta -> currentStage a t1 = leader_propose) /\
-(* as a non-leader member, it sends its local winner at t0, the leader might be delta after him. 
-In his local time, leader proposes winner by t0+3*delta. 
-Therefore he expect to receive the proposal by t0+4*delta. 
-On the other hand, he receives the proposal after t0+delta. 
-*)
-  (t1>=t+web_time+4*delta /\ t1<t+web_time+5*delta -> currentStage a t1 = receive_from_leader). 
-  
-
-(* Hotstuff stages after receiving the leader's proposal, we need a new timer*)
-(*Hypothesis after_receiving_proposal: 
-  forall a*)
 
 (* Real hypothesis: at least one block proposer is honest 
 -> all committee members at least receive one block proposal with aggregated votes. *) 
@@ -228,7 +236,7 @@ Hypothesis committeeReceiveAggregatedProposal:
     (In m (incomingMessages a)) /\ 
     (m = msg b a (block_with_votes slot bl w) t') /\
     (currentSlot a t' = slot) /\
-    (currentStage a t' = receiving_proposals). 
+    (t' <= lockLocalWinnerTime a slot). 
     
 
 Fixpoint allAggregatedProposals (a:person) (slot:nat) (messages: list message) : list msgcontent :=
