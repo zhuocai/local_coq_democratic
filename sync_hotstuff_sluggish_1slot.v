@@ -30,21 +30,36 @@ Variable isHonest : person -> bool.
 
 Variable n_replicas : nat.
 
-Fixpoint range (n:nat) : list nat :=
+Fixpoint inv_range (n:nat) : list nat :=
     match n with
-    | O => []
-    | S n' => n' :: range n'
+    | 0 => []
+    | S n' => n :: inv_range n'
     end.
-Definition replicas := range n_replicas.
+   
+Definition replicas := rev (inv_range n_replicas).
 
+Theorem replica_i_is_i:
+    forall i:nat, i < n_replicas -> nth i replicas 1 = i+1.
+    intros.
+    induction n_replicas.
+    inversion H. (* n_replicas=0 done*)
+    
 
+Qed.
 (* leader of round i is replica i%n. Where n is length replicas. And f+1 of them are honest *)
 
 Hypothesis honestMajority: 
     length (filter isHonest replicas) * 2 > n_replicas.
 
 Definition leaderOfRound (round:nat) : person :=
-    nth (round mod n_replicas) replicas 0.
+    nth (((round-1) mod n_replicas)) replicas 1.
+
+(*actually we will prove that the protocol finishes within the first N rounds. *)
+Theorem leaderOfFirstNRounds:
+    forall r:nat, r>=1 -> r < n_replicas -> leaderOfRound r = r+1.
+    intros.
+    unfold leaderOfRound.
+Qed.
 
 (* note that round starts from 0, replicas start from 0~n-1*)
 
