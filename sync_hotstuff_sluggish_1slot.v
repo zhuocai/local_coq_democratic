@@ -262,7 +262,42 @@ Qed.
 Definition leaderOfRound (round:nat) : person :=
     nth (((round-1) mod n_replicas)) replicas 0.
 
+Lemma le_Sn_le:
+    forall n m, S n <= m -> n <= m.
+    intros.
+    assert (n<= S n ).
+    apply le_S.
+    trivial.
+    apply le_trans with (x1:= n) (x2:=S n).
+
+Qed.
+
+Lemma divmod_small_range:
+    forall x:nat, forall y:nat, forall r:nat,
+        x<=y -> x+r<=y ->
+        Nat.divmod x y 0 (x+r) = (0, r).
+    intros.
+    induction x.
+    simpl.
+    trivial.
+    simpl.
+    apply IHx.
+    apply .le_Sn_le with (n:=x) (m:=y).
+
+
+Qed.
+
+Lemma mod_smaller_range:
+    forall i:nat, forall n:nat, 
+        1<=n /\ i<= n-1
+            -> i mod n = i.
+    intros.
+    destruct H.
+    unfold "mod".
+Qed.
+
 (*actually we will prove that the protocol finishes within the first N rounds. *)
+
 Theorem leaderOfFirstNRounds:
     forall r:nat, 1<=r -> r <= n_replicas -> leaderOfRound r = r.
     intros.

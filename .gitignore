@@ -1,2 +1,7 @@
 *.DS_Store
 
+
+# CoqPilot auxiliary files
+*_cp_aux.v
+
+.vscode/*

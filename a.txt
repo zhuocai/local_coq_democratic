@@ -1,0 +1,14 @@
+x / y = divmod x y-1 0 y-1
+
+Idea: a counter of y. Wheneven the counter reaches 0, reset it to y. 
+y-1, y-2, ..., 2, 1, 0. 
+
+divmod x y' q u:
+
+divmod 0 _ _ _ = (q, u)
+
+otherwise: 
+
+(divmod x-1 y' q u-1)
+or 
+(divmod x-1 y' q+1 y')
