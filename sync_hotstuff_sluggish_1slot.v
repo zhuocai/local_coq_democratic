@@ -4,6 +4,8 @@ Require Import Structures.Orders.
 Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Bool.Bool.
 Require Import Coq.Arith.Arith.
+Require Coq.Init.Nat.
+Require Import Coq.Init.Peano. 
 Import ListNotations.
 
 
@@ -30,29 +32,232 @@ Variable isHonest : person -> bool.
 
 Variable n_replicas : nat.
 
-Fixpoint inv_range (n:nat) : list nat :=
+Hypothesis non_empty_replicas:
+    n_replicas > 0.
+
+Fixpoint range (n:nat) : list nat :=
     match n with
     | 0 => []
-    | S n' => n :: inv_range n'
+    | S n' => range n' ++ [n]
     end.
    
-Definition replicas := rev (inv_range n_replicas).
+Definition replicas := range n_replicas.
 
-Theorem replica_i_is_i:
-    forall i:nat, i < n_replicas -> nth i replicas 1 = i+1.
+Lemma rev_dist:
+    forall l1 l2: list nat, rev (l1 ++ l2) = rev l2 ++ rev l1.
     intros.
-    induction n_replicas.
-    inversion H. (* n_replicas=0 done*)
-    
+    induction l1.
+    simpl. rewrite app_nil_r. reflexivity.
+    simpl. rewrite IHl1. rewrite app_assoc. reflexivity.
 
 Qed.
+
+Lemma rev_rev:
+    forall l: list nat, rev (rev l) = l.
+    intros. 
+    induction l.
+    simpl. reflexivity. 
+    simpl. rewrite rev_dist. rewrite IHl. simpl. reflexivity.
+    
+Qed.
+
+Lemma length_range:
+    forall n:nat, length (range n) = n.
+    intros. 
+    induction n.
+    simpl. reflexivity.
+    simpl. rewrite length_app. rewrite IHn. simpl. ring.
+Qed.
+
+Lemma nmn0:
+    forall n:nat, n - n = 0.
+    intros.
+    induction n.
+    simpl. reflexivity.
+    simpl. rewrite IHn. reflexivity.
+Qed.
+
+Lemma zmSn:
+    forall n:nat, 0 < S n.
+    intros.
+    apply le_n_S. apply le_0_n.
+    Qed.
+
+Theorem replica_i_is_i:
+    forall i:nat, i < n_replicas -> nth i replicas 0 = 1+i.
+    intros.
+    unfold replicas.
+    induction n_replicas.
+    inversion H.
+    assert (i<n \/ i=n).
+    apply Nat.lt_eq_cases.
+    unfold lt in H.
+    apply le_S_n.
+    trivial.
+    destruct H0.
+    assert (length (range n) = n).
+    rewrite length_range. trivial.
+    replace (range (S n)) with (range n ++ [S n]).  
+    rewrite app_nth1 with (l:=range n) (l':=[S n]).
+    assert (n>0).
+    destruct n.
+    inversion H0.
+    apply zmSn.
+    apply IHn.
+    assumption.
+    assumption.
+    rewrite H1.
+    assumption.
+    trivial.
+    induction n.
+    rewrite H0.
+    simpl.
+    trivial.
+    replace (range (S (S n))) with (range (S n) ++ [S (S n)]).
+    rewrite app_nth2 with (l:=range (S n)) (l':=[S (S n)]).
+    rewrite length_range. 
+    rewrite H0.
+    replace (S n - S n) with 0.
+    simpl. trivial.
+    rewrite nmn0. trivial.
+    rewrite length_range. 
+    unfold ge. 
+    rewrite H0.
+    apply le_n. 
+    simpl. trivial.
+Qed. 
 (* leader of round i is replica i%n. Where n is length replicas. And f+1 of them are honest *)
 
 Hypothesis honestMajority: 
     length (filter isHonest replicas) * 2 > n_replicas.
 
+Lemma le_trans:
+    forall x1 x2 x3:nat, x1 <= x2 -> x2 <= x3 -> x1 <= x3.
+    intros.
+    induction H as [ | x2 IH].
+    assumption.
+    assert (S x2<= S x3).
+    apply le_S.
+    assumption.
+    assert (x2<=x3).
+    apply le_S_n.  
+    trivial.
+    apply IHIH.
+    trivial.
+Qed.
+
+Lemma ele_subset_in_set_simp: (* directly use filter_In in the stdlib *)
+    forall (A:Type) (l: list A) (cond: A->bool),
+        forall x:A, In x (filter cond l) -> In x l.
+        induction l. 
+        simpl.
+        intros.
+        destruct H.
+        intros.
+        case_eq(cond a).
+        intros.
+        replace (filter cond (a::l)) with (a::(filter cond l)) in H.
+        induction H.
+        simpl. left. trivial.
+        simpl. right. apply (IHl cond x). assumption.
+        simpl. rewrite H0. reflexivity.
+        intros.
+        replace (filter cond (a::l)) with (filter cond l) in H.
+        right. apply (IHl cond x). simpl. assumption.
+        simpl. rewrite H0. reflexivity.
+Qed.
+
+Lemma le_n_S_n:
+    forall x:nat, forall y:nat, x<=y -> x <= S y.
+    intros.
+    assert (y <= S y).
+    apply le_S.
+    trivial.
+    apply le_trans with (x1:=x) (x2:=y) (x3:=S y).
+    trivial.
+    trivial.
+Qed. 
+
+Lemma all_replicas_lt_n:
+    forall i:nat, (In i replicas) -> 1<=i /\ i<=n_replicas.
+    intros.
+    clear honestMajority.
+    clear non_empty_replicas.
+    clear delta.
+    unfold replicas in H.
+    induction n_replicas.
+    simpl in H. destruct H.
+    simpl in H.
+    apply in_app_or in H.
+    destruct H.
+    assert (1<=i<=n).
+    apply IHn.
+    assumption.
+    split.
+    destruct H0.
+    assumption.
+    destruct H0.
+    apply le_n_S_n with (y:=n). assumption.
+    simpl in H.
+    destruct H.
+    rewrite H.
+    split.
+    replace i with  (S n).
+    apply zmSn.
+    apply le_n.
+    destruct H. 
+
+
+
+Qed.
+
+Theorem existHonest:
+    exists i:nat, In i replicas /\ isHonest i = true.
+    remember (length (filter isHonest replicas)) as len.
+    unfold gt in non_empty_replicas, honestMajority.
+    unfold lt in honestMajority, non_empty_replicas.
+    assert (2<=len*2). 
+    assert (2<=S n_replicas).
+    apply le_n_S.
+    trivial.
+    pose proof (le_trans 2 (S n_replicas) (len*2)) as trans.
+    apply trans.
+    trivial.
+    trivial.
+    assert (1<=len).
+    destruct len.
+    simpl in H.
+    inversion H.
+    apply zmSn.
+    remember (filter isHonest replicas) as honests.
+    assert (len = length honests).
+    rewrite Heqlen.
+    trivial.
+    remember (nth 0 honests 0) as fist.
+    exists fist. 
+    split.
+    assert (In fist honests).
+    rewrite Heqfist.
+    assert (0 < length honests).
+    unfold lt.
+    replace (length honests) with len.
+    assumption.
+
+    pose proof (nth_In honests 0 H2) as nthIn.
+    trivial.
+    apply (filter_In isHonest fist replicas).
+    rewrite Heqhonests in H2. 
+    assumption.
+    apply (filter_In isHonest fist replicas).
+    rewrite Heqfist.
+    replace (filter isHonest replicas) with honests.
+    apply nth_In.
+    replace (length honests) with len.
+    assumption.
+Qed.
+
 Definition leaderOfRound (round:nat) : person :=
-    nth (((round-1) mod n_replicas)) replicas 1.
+    nth (((round-1) mod n_replicas)) replicas 0.
 
 (*actually we will prove that the protocol finishes within the first N rounds. *)
 Theorem leaderOfFirstNRounds:
