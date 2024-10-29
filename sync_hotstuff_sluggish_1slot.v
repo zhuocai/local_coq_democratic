@@ -6,6 +6,7 @@ Require Import Coq.Bool.Bool.
 Require Import Coq.Arith.Arith.
 (* Require Import Coq.Init.Peano. 
 Require Coq.Init.Nat. *)
+Require Import Lia.
 Import ListNotations.
 
 (* Replicas: [1,2,..., n] starting from 1 *)
@@ -23,12 +24,15 @@ Inductive certType : Type :=
     | cert (block:blockType) (round: nat).
 
 Inductive msgContentType : Type :=
-    | propose (Bk: blockType) (round: nat) (cert: certType)
+    | propose (Bk: blockType) (round: nat) (cert: certType) (proposer: person)
     | vote (Bk: blockType) (round:nat) (voter:person)
     | precommit (Bk: blockType) (round: nat) (voter:person).
 
 
 Definition msgType := (person * person * msgContentType * nat) % type.
+
+Definition is_element (a : nat) (b : list nat) : bool :=
+  existsb (fun x => Nat.eqb x a) b.
 
 Variable isHonest : person -> bool.
 
@@ -269,6 +273,8 @@ Lemma le_Sn_le:
     apply le_S.
     trivial.
     apply le_trans with (x1:= n) (x2:=S n).
+    trivial.
+    trivial.
 
 Qed.
 
@@ -282,10 +288,13 @@ Lemma divmod_small_range:
     trivial.
     simpl.
     apply IHx.
-    apply .le_Sn_le with (n:=x) (m:=y).
-
-
+    apply le_Sn_le with (n:=x) (m:=y).
+    trivial.
+    apply le_Sn_le with (n:=x+r) (m:=y).
+    trivial.
 Qed.
+
+
 
 Lemma mod_smaller_range:
     forall i:nat, forall n:nat, 
@@ -294,6 +303,19 @@ Lemma mod_smaller_range:
     intros.
     destruct H.
     unfold "mod".
+    induction n.
+    inversion H.
+    replace (Nat.divmod i n 0 n) with (0, n-i).
+    simpl.
+    lia.
+    replace (Nat.divmod i n 0 n) with (Nat.divmod i n 0 (i+(n-i))).
+    rewrite divmod_small_range with (x:=i) (y:=n) (r:=n-i).
+    trivial.
+    nia.
+    nia.
+    replace (i+(n-i)) with n.
+    trivial.
+    nia.
 Qed.
 
 (*actually we will prove that the protocol finishes within the first N rounds. *)
@@ -304,52 +326,14 @@ Theorem leaderOfFirstNRounds:
     unfold leaderOfRound.
     replace ((r-1) mod n_replicas) with (r-1).
     rewrite replica_i_is_i.
-    induction r.
-    inversion H.
-    simpl.
-    rewrite Nat.sub_0_r.
+    lia.
+    lia.
+    rewrite mod_smaller_range with (n:=n_replicas).
     trivial.
-    unfold lt.
-    induction r.
-    inversion H.
-    assert (S r- 1= r). 
-    simpl. 
-    apply Nat.sub_0_r.
-    rewrite H1. 
-    apply H0. 
-    unfold "mod".
-    induction r.
-    inversion H.
-    simpl.
-    rewrite Nat.sub_0_r.
-    clear IHr.
-    clear H.
-    clear non_empty_replicas.
-    clear honestMajority.
-    induction n_replicas.
-    trivial.   
-    induction n.
-    simpl.
-    clear IHn n_replicas isHonest delta.
-    destruct r.
-    trivial.
-    assert (S r <=0).
-    rewrite le_S_n with (n:=S r) (m:= 0).
-    apply le_n.
-    trivial.
-    inversion H.
-    
-
-
-
-
-    
-
-
-
+    lia.
 Qed.
 
-(* note that round starts from 0, replicas start from 0~n-1*)
+(* note that round starts from 1, replicas 1~n*)
 
 Definition isLeader (round:nat) (replica:person) : bool :=
     Nat.eqb (leaderOfRound round) replica.
@@ -358,24 +342,16 @@ Definition isLeader (round:nat) (replica:person) : bool :=
 (* for each round*)
 Variable certifiedBlocks : person -> nat -> list blockType.
 
-Variable viewOfHighestCertifiedBlock : person -> nat -> nat. (* problem with view 0. If there is no certified block, I want it to return -1? Let round starts with 1. *)
+Variable viewOfHighestCertifiedBlock : person -> nat -> nat. (* Let round starts with 1. If there is no previous certified block. return 0. *)
 
 Hypothesis highestCertifiedBlock_def:
     forall p: person, forall r1: nat,
     ( forall r2:nat,
+    1<=r1 -> 1<=r2 ->
     r1 <= r2 ->
+    isHonest p = true ->
         length (certifiedBlocks p r1) > 0 ->
-        (viewOfHighestCertifiedBlock p r2) >= r1) /\
-        ((viewOfHighestCertifiedBlock p r1)>=0).
-
-
-(* the list is sorted in descending order of block number *)
-
-(* the list is sorted in descending order of round number *)
-
-(* the list is sorted in descending order of block number *)
-
-(* the list is sorted in descending order of round number *)
+        (viewOfHighestCertifiedBlock p r2) >= r1). (* if p has a certified block in view r1, future highest certified blocks in view at least r1. *)
 
 Variable incomingMessages : person -> list msgType.
 Variable outgoingMessages : person -> list msgType.
@@ -424,71 +400,116 @@ Variable proposalsOfLeaders: person->nat-> (prod blockType certType).
 
 (* the following two assumptions are necessary. *)
 
-Hypothesis startAtZero: 
-    forall p:person, forall r:nat, roundStartTime p r = 0.
+Hypothesis startR1AtZero: 
+    forall p:person, roundStartTime p 1 = 0.
 
 Hypothesis roundStartAfterEnd:
-    forall p:person, forall r:nat, roundStartTime p (r+1) = roundEndTime p r.
+    forall p:person, forall r:nat, 1<=r -> roundStartTime p (r+1) = roundEndTime p r.
 (* seems like in the sluggish protocol, there is no waiting. To be adjusted later. *)
 
 
-Hypothesis leaderProposaR0_empty_cert:
+Hypothesis leaderProposaR1_empty_cert:
     exists Bk: blockType,
-        let l0:= leaderOfRound 0 in
-            isHonest l0 = true -> proposalsOfLeaders l0 0 = (Bk, empty).
+        let l1:= leaderOfRound 1 in
+            isHonest l1 = true -> proposalsOfLeaders l1 1 = (Bk, empty).
 
-Hypothesis leaderProposeR0:
+Hypothesis leaderProposeR1:
     forall p:person, 
-        let l0 := leaderOfRound 0 in
-        isHonest l0 = true -> In (p, l0, (propose (fst (proposalsOfLeaders l0 0)) 0 (snd (proposalsOfLeaders l0 0))), roundStartTime l0 0) (outgoingMessages l0).
+        In p replicas ->
+        let l1 := leaderOfRound 1 in
+        isHonest l1 = true -> In (p, l1, (propose (fst (proposalsOfLeaders l1 1)) 1 (snd (proposalsOfLeaders l1 1)) l1), roundStartTime l1 1) (outgoingMessages l1).
 
 
 (* new leaders should wait for 2*delta time after entering its view. One delta for others to enter view, another delta to let others send their locked cert. *)
 Hypothesis leaderProposeRn:
     forall p:person, forall r:nat, 
-        r>=1 ->
+        r>=2 -> In p replicas ->
         let lr := leaderOfRound r in
-        isHonest lr = true -> In (p, lr, (propose (fst (proposalsOfLeaders lr r)) r (snd (proposalsOfLeaders lr r))), (roundStartTime lr r) + 2*delta) (outgoingMessages lr).
+        isHonest lr = true -> In (p, lr, (propose (fst (proposalsOfLeaders lr r)) r (snd (proposalsOfLeaders lr r)) lr), (roundStartTime lr r) + 2*delta) (outgoingMessages lr).
 
 
 (* the above only says that the leader of round 0 should propose. It does not say that an honest leader only send 1 and only send at time 0. *)
 Hypothesis leaderPropose_proposal_in_time_AND_unique:
     forall l p:person, forall msg:msgContentType, forall t:nat,
+        In l replicas -> In p replicas ->
         isHonest l = true -> 
-        In (l, p, msg, t) (outgoingMessages l) ->
         exists (Bk:blockType) (r:nat) (cert:certType),
-            msg = (propose Bk r cert) ->
+        In (l, p, (propose Bk r cert l), t) (outgoingMessages l) ->
         (
         let r' := currentRound p t in 
         let (Bk', cert') := proposalsOfLeaders l r' in
             r' = r /\ Bk' = Bk /\ cert' = cert
-            /\ ((r=0 /\ t = roundStartTime l 0) \/ (r>=1 /\ t = (roundStartTime l r) + 2*delta))
+            /\ ((r=1 /\ t = roundStartTime l 1) \/ (r>=2 /\ t = (roundStartTime l r) + 2*delta))
         ).
 
 
 (* vote | new-view is also a propose. *)
+(* the following proposalValid checks if it has certificates. *)
 
 Definition isProposalValid (p:person) (Bk:blockType) (r:nat) (cert:certType) : bool :=
-    if r =? 0 then
-        match cert with
-        | empty => true
+    if is_element p replicas then
+        if r =? 0 then false else
+        if r =? 1 then
+            match cert with
+            | empty => true
+            | _ => false
+            end
+        else
+            match cert with
+            | empty => if viewOfHighestCertifiedBlock p (r-1) =? 0 then true else false 
+            | cert Bk' r' => 
+                if viewOfHighestCertifiedBlock p (r-1) <=? r' then true else false
+            end
+    else false.
+
+
+Definition eq_cert (c1:certType) (c2:certType) : bool :=
+    match c1, c2 with
+    | empty, empty => true
+    | cert Bk1 r1, cert Bk2 r2 => (Bk1 =? Bk2) && (r1 =? r2)
+    | _, _ => false
+    end.
+
+(* the following isProposalDuplicate checks if the proposal is a duplicate. *)
+
+Definition collapse  (p:person) (sender:person) (leader:person) (Bk:blockType) (r:nat) (cert:certType) (t:nat) (msg:msgType): bool :=
+    match msg with
+    | (_, p, msgcontent', t') =>
+        match msgcontent' with
+        | propose Bk' r' cert' sender' =>
+            if (r=?r') && (((t<?t') && ((negb (sender =? sender')) || (eq_cert cert cert'))) || ((t=?t') && (sender'<?sender))) then true else false 
         | _ => false
         end
-    else
-        match cert with
-        | empty => 
-        | cert Bk' r' => 
-            if Bk =? Bk' then
-                if r =? r' + 1 then
-                    true
-                else
-                    false
-            else
-                false
-        end.
+    end.
 
+Definition isProposalDuplicate (p:person) (sender:person) (leader:person) (Bk:blockType) (r:nat) (cert:certType) (t:nat):bool :=
+    let collapse :=
+        fun msg:msgType =>
+            match msg with
+            | (_, p, msgcontent', t') =>
+                match msgcontent' with
+                | propose Bk' r' cert' sender' =>
+                    if (r=?r') && (((t<?t') && ((negb (sender =? sender')) || (eq_cert cert cert'))) || ((t=?t') && (sender'<?sender))) then true else false 
+                | _ => false
+                end
+            end in 
+    if 0<?(length (filter collapse (incomingMessages p))) then true else false.
 
+(* vote is valid if the voter has seen the proposal and the proposal is valid. *)
 
+Hypothesis voteValid:
+    forall p:person, forall leader:person, forall Bk:blockType, forall r:nat, forall cert:certType, forall t:nat, forall anyone:nat, 
+    In p replicas ->
+    In leader replicas ->  
+    In anyone replicas ->
+    isHonest p = true ->
+    isLeader r leader = true ->
+        In (leader, p, (propose Bk r cert), t) (incomingMessages p) ->
+        isProposalValid p Bk r cert = true ->
+        isProposalDuplicate p leader Bk r cert t = false ->
+        In (p, anyone, (vote Bk r p), t) (outgoingMessages p).
+
+(* precommit is valid if the voter has seen the proposal and the proposal is valid. *)
 
 
 
