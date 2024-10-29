@@ -1,13 +1,15 @@
-Require Import Nat.
+(* Require Import Nat. *)
 Require Import Lists.List.
 Require Import Structures.Orders.
 Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Bool.Bool.
 Require Import Coq.Arith.Arith.
-Require Coq.Init.Nat.
-Require Import Coq.Init.Peano. 
+(* Require Import Coq.Init.Peano. 
+Require Coq.Init.Nat. *)
 Import ListNotations.
 
+(* Replicas: [1,2,..., n] starting from 1 *)
+(* Round: starting from 1! *)
 
 Section sync_hotstuff_sluggish_1block.
 
@@ -83,6 +85,7 @@ Lemma zmSn:
     apply le_n_S. apply le_0_n.
     Qed.
 
+(* for the replicas list *)
 Theorem replica_i_is_i:
     forall i:nat, i < n_replicas -> nth i replicas 0 = 1+i.
     intros.
@@ -261,9 +264,54 @@ Definition leaderOfRound (round:nat) : person :=
 
 (*actually we will prove that the protocol finishes within the first N rounds. *)
 Theorem leaderOfFirstNRounds:
-    forall r:nat, r>=1 -> r < n_replicas -> leaderOfRound r = r+1.
+    forall r:nat, 1<=r -> r <= n_replicas -> leaderOfRound r = r.
     intros.
     unfold leaderOfRound.
+    replace ((r-1) mod n_replicas) with (r-1).
+    rewrite replica_i_is_i.
+    induction r.
+    inversion H.
+    simpl.
+    rewrite Nat.sub_0_r.
+    trivial.
+    unfold lt.
+    induction r.
+    inversion H.
+    assert (S r- 1= r). 
+    simpl. 
+    apply Nat.sub_0_r.
+    rewrite H1. 
+    apply H0. 
+    unfold "mod".
+    induction r.
+    inversion H.
+    simpl.
+    rewrite Nat.sub_0_r.
+    clear IHr.
+    clear H.
+    clear non_empty_replicas.
+    clear honestMajority.
+    induction n_replicas.
+    trivial.   
+    induction n.
+    simpl.
+    clear IHn n_replicas isHonest delta.
+    destruct r.
+    trivial.
+    assert (S r <=0).
+    rewrite le_S_n with (n:=S r) (m:= 0).
+    apply le_n.
+    trivial.
+    inversion H.
+    
+
+
+
+
+    
+
+
+
 Qed.
 
 (* note that round starts from 0, replicas start from 0~n-1*)
