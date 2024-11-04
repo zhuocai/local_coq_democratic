@@ -5,3 +5,5 @@
 *_cp_aux.v
 
 .vscode/*
+*.vscode/*
+*.cache/*

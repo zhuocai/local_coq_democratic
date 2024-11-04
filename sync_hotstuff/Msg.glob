@@ -1,0 +1,20 @@
+DIGEST ae676f9c3e3b1df41d347879499a65ea
+FMsg
+R15:18 Node <> <> lib
+sec 31:34 <> Node
+rec 45:47 <> Msg
+proj 59:61 <> msg
+var  82:82 Node m
+R86:88 Msg <> Msg class
+rec 100:110 <> DirectedMsg
+proj 129:133 <> dmMsg
+proj 147:151 <> dmDst
+proj 171:177 <> dmDelay
+R137:139 Msg <> msg meth
+R155:158 Coq.Init.Datatypes <> list ind
+R160:163 Node <> name def
+R181:183 Coq.Init.Datatypes <> nat ind
+def 202:213 <> DirectedMsgs
+R218:221 Coq.Init.Datatypes <> list ind
+R223:233 Msg <> DirectedMsg rec
+R242:245 Msg Node <> sec

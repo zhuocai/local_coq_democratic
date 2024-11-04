@@ -21,13 +21,21 @@ Definition person := nat.
 
 Inductive certType : Type :=
     | empty
-    | cert (block:blockType) (round: nat).
+    | certificates (block:blockType) (round: nat).
 
 Inductive msgContentType : Type :=
     | propose (Bk: blockType) (round: nat) (cert: certType) (proposer: person)
     | vote (Bk: blockType) (round:nat) (voter:person)
-    | precommit (Bk: blockType) (round: nat) (voter:person).
+    | precommit (Bk: blockType) (round: nat) (voter:person)
+    | blame (round: nat) (blamer:person).
 
+Inductive precommitOrEmptyType : Type :=
+    | precommitEmpty
+    | precommitConstructor (Bk: blockType).
+
+Inductive blockOrEmptyType : Type :=
+    | blockEmpty
+    | blockConstructor (Bk: blockType).
 
 Definition msgType := (person * person * msgContentType * nat) % type.
 
@@ -36,7 +44,13 @@ Definition is_element (a : nat) (b : list nat) : bool :=
 
 Variable isHonest : person -> bool.
 
+Variable n_maj : nat. 
+
 Variable n_replicas : nat.
+
+Hypothesis n_2f_1:
+    n_replicas = 2 * n_maj + 1.
+
 
 Hypothesis non_empty_replicas:
     n_replicas > 0.
@@ -94,6 +108,7 @@ Theorem replica_i_is_i:
     forall i:nat, i < n_replicas -> nth i replicas 0 = 1+i.
     intros.
     unfold replicas.
+    clear n_2f_1.
     induction n_replicas.
     inversion H.
     assert (i<n \/ i=n).
@@ -191,6 +206,7 @@ Lemma all_replicas_lt_n:
     clear honestMajority.
     clear non_empty_replicas.
     clear delta.
+    clear n_2f_1.
     unfold replicas in H.
     induction n_replicas.
     simpl in H. destruct H.
@@ -342,6 +358,15 @@ Definition isLeader (round:nat) (replica:person) : bool :=
 (* for each round*)
 Variable certifiedBlocks : person -> nat -> list blockType.
 
+Variable committedBlock : person -> nat -> blockOrEmptyType.
+
+Variable is_committedTime: person  -> nat -> bool.
+
+(* committed block is the last certified block. *)
+Variable roundOfCommit : person -> nat.
+
+(* committed block is the last certified block. *)
+
 Variable viewOfHighestCertifiedBlock : person -> nat -> nat. (* Let round starts with 1. If there is no previous certified block. return 0. *)
 
 Hypothesis highestCertifiedBlock_def:
@@ -381,11 +406,23 @@ Hypothesis synchrony_incoming_implies_outgoing:
 (* the list is sorted in ascending order of round number *)
 
 Variable roundStartTime : person -> nat -> nat.
-
+Variable precommitTime : person -> nat -> nat. 
 (* the time when the round starts *)
 Variable roundEndTime : person -> nat -> nat.
 
 Variable currentRound : person -> nat -> nat. 
+
+Variable hasQuit : person -> nat -> bool.
+
+Inductive RoundResultType : Type :=
+    | RoundCommitted (Bk: blockType)
+    | RoundQuitConflict (Bk1: blockType) (cert1: certType) (Bk2: blockType) (cert2: certType)
+    | RoundQuitBlame. 
+
+Variable resultRound: person -> nat -> RoundResultType. 
+
+
+(* the following two assumptions are necessary. *)
 
 Hypothesis currentRound_def: 
     forall p: person, forall t: nat, 
@@ -397,6 +434,8 @@ Hypothesis currentRound_def:
 (* proposal of leader in slot s. If person is not leader in the slot, return arbitrary things. *)
 Variable proposalsOfLeaders: person->nat-> (prod blockType certType).
 (* the proposal of a leader is the block and the certificate. *)
+Variable precommitOfMembers: person->nat->precommitOrEmptyType. 
+
 
 (* the following two assumptions are necessary. *)
 
@@ -457,7 +496,7 @@ Definition isProposalValid (p:person) (Bk:blockType) (r:nat) (cert:certType) : b
         else
             match cert with
             | empty => if viewOfHighestCertifiedBlock p (r-1) =? 0 then true else false 
-            | cert Bk' r' => 
+            | certificates Bk' r' => 
                 if viewOfHighestCertifiedBlock p (r-1) <=? r' then true else false
             end
     else false.
@@ -466,50 +505,184 @@ Definition isProposalValid (p:person) (Bk:blockType) (r:nat) (cert:certType) : b
 Definition eq_cert (c1:certType) (c2:certType) : bool :=
     match c1, c2 with
     | empty, empty => true
-    | cert Bk1 r1, cert Bk2 r2 => (Bk1 =? Bk2) && (r1 =? r2)
+    | certificates Bk1 r1, certificates Bk2 r2 => (Bk1 =? Bk2) && (r1 =? r2)
     | _, _ => false
     end.
 
 (* the following isProposalDuplicate checks if the proposal is a duplicate. *)
 
-Definition collapse  (p:person) (sender:person) (leader:person) (Bk:blockType) (r:nat) (cert:certType) (t:nat) (msg:msgType): bool :=
+Definition conflict  (p:person) (leader:person) (Bk:blockType) (r:nat) (cert:certType) (t:nat) (msg:msgType): bool :=
     match msg with
     | (_, p, msgcontent', t') =>
         match msgcontent' with
-        | propose Bk' r' cert' sender' =>
-            if (r=?r') && (((t<?t') && ((negb (sender =? sender')) || (eq_cert cert cert'))) || ((t=?t') && (sender'<?sender))) then true else false 
+        | propose Bk' r' cert' proposer' =>
+            if (r=?r') then
+                if (proposer' =? leader) then 
+                    if (t<?t') then negb (Bk =? Bk') || negb (eq_cert cert cert') else 
+                    if (t=?t') then negb (Bk' <? Bk) || ((Bk' =? Bk) && negb (eq_cert cert cert')) else false
+                else false 
+            else false 
         | _ => false
         end
     end.
 
 Definition isProposalDuplicate (p:person) (sender:person) (leader:person) (Bk:blockType) (r:nat) (cert:certType) (t:nat):bool :=
-    let collapse :=
-        fun msg:msgType =>
-            match msg with
-            | (_, p, msgcontent', t') =>
-                match msgcontent' with
-                | propose Bk' r' cert' sender' =>
-                    if (r=?r') && (((t<?t') && ((negb (sender =? sender')) || (eq_cert cert cert'))) || ((t=?t') && (sender'<?sender))) then true else false 
-                | _ => false
-                end
-            end in 
-    if 0<?(length (filter collapse (incomingMessages p))) then true else false.
+    if 0<?(length (filter (conflict p leader Bk r cert t) (incomingMessages p))) then true else false.
 
 (* vote is valid if the voter has seen the proposal and the proposal is valid. *)
 
 Hypothesis voteValid:
-    forall p:person, forall leader:person, forall Bk:blockType, forall r:nat, forall cert:certType, forall t:nat, forall anyone:nat, 
+    forall p:person, forall sender:person, forall leader:person, forall Bk:blockType, forall r:nat, forall cert:certType, forall t:nat, forall anyone:person, 
     In p replicas ->
+    In sender replicas ->
     In leader replicas ->  
     In anyone replicas ->
     isHonest p = true ->
     isLeader r leader = true ->
-        In (leader, p, (propose Bk r cert), t) (incomingMessages p) ->
-        isProposalValid p Bk r cert = true ->
-        isProposalDuplicate p leader Bk r cert t = false ->
+    currentRound p t = r -> (* also need a round not quit check. *)
+        In (sender, p, (propose Bk r cert leader), t) (incomingMessages p) ->
+        isProposalValid p Bk r cert = true -> (* check certificate*)
+        isProposalDuplicate p sender leader Bk r cert t = false -> (* check duplicate *)
         In (p, anyone, (vote Bk r p), t) (outgoingMessages p).
 
+Hypothesis forwardProposal:
+    forall p:person, forall sender:person, forall anyone: person, forall leader:person, forall Bk:blockType, forall r:nat, forall cert:certType, forall t:nat,
+    In p replicas ->
+    In anyone replicas ->
+    isHonest p = true ->
+    r >= 1 ->
+    currentRound p t = r ->
+    isLeader r leader = true ->
+    In (sender, p, (propose Bk r cert leader), t) (incomingMessages p) ->
+    In (p, anyone, (propose Bk r cert leader), t) (outgoingMessages p).
+    
+Hypothesis blameLeader: (*not receiving a proposal in time*)
+    forall p:person, forall leader:person, forall anyone:person, forall round:nat, 
+    In p replicas ->
+    In leader replicas ->
+    In anyone replicas ->
+    isHonest p = true ->
+    isLeader round leader = true ->
+    round >=1 ->
+    let blameTime := if round =? 1 then (roundStartTime leader 1) + delta else if 2<=?round then  (roundStartTime leader round) + 4*delta else 0 in
+    (
+    (forall Bk: blockType, forall cert:certType, forall t:nat, 
+        In (leader, p, (propose Bk round cert leader), t) (incomingMessages p) -> t>blameTime) -> (* TODO set the time correct *)
+    In (p, anyone, (blame round p), blameTime) (outgoingMessages p)).
+
 (* precommit is valid if the voter has seen the proposal and the proposal is valid. *)
+
+Fixpoint countNonRep (l: list nat) : nat :=
+    match l with
+    | [] => 0
+    | h::t => if is_element h replicas then countNonRep t else 1 + countNonRep t
+    end.
+
+Definition CountMsgs (cond:msgType->bool) (extractPerson: msgType->person) (msgs: list msgType) : nat :=
+    countNonRep (map extractPerson (filter cond msgs)).
+
+Definition cond_proposal (p:person) (Bk:blockType) (round:nat) (cert: certType) (proposer:person) (tleft:nat) (tright:nat) (msg:msgType): bool :=
+    match msg with
+    | (_, p, propose Bk round cert proposer, t) => 
+        (tleft<=?t) && (t<=?tright)
+    | _ => false
+    end.
+
+
+Definition cond_precommit(p:person) (Bk:blockType) (round:nat) (tleft:nat) (tright:nat) (msg:msgType):bool:=
+    match msg with 
+    | (_, p, precommit Bk round _, t) =>
+        (tleft<=?t) && (t<=?tright)
+    | _ => false
+    end.
+
+Definition extract_sender (msg:msgType) : person :=
+    match msg with
+    | (p, _, _, _) => p
+    end.    
+
+Hypothesis precommitPrepare:
+    forall p:person, forall leader:person, forall anyone:person, forall Bk:blockType, forall r:nat, forall cert:certType, forall t:nat,
+    In p replicas ->
+    In anyone replicas ->
+    In leader replicas ->
+    isHonest p = true ->
+    r >= 1 ->
+    isLeader r leader = true ->
+    currentRound p t = r -> (*might need quit view fix*)
+    CountMsgs (cond_proposal p Bk r cert leader (roundStartTime p r) t) (extract_sender) (incomingMessages p) >= n_maj ->
+    (t>=1 ->
+    CountMsgs (cond_proposal p Bk r cert leader (roundStartTime p r) (t-1)) (extract_sender) (incomingMessages p) < n_maj) ->
+    precommitTime p r = t /\ precommitOfMembers p r = precommitConstructor Bk. 
+
+Hypothesis precommitTrigger:
+    forall p:person, forall round: nat, forall anyone:person, forall t:nat, forall Bk:blockType, 
+    In p replicas ->
+    In anyone replicas ->
+    isHonest p = true ->
+    round >= 1 ->
+    currentRound p t = round ->
+    t = precommitTime p round + 2*delta ->
+    In (p, anyone, (precommit Bk round p), t) (outgoingMessages p).
+
+Hypothesis commitMember: 
+    forall p:person, forall anyone:person, forall round: nat, forall t:nat, forall Bk:blockType, 
+    In p replicas ->
+    In anyone replicas ->
+    isHonest p = true ->
+    round >= 1 ->
+    currentRound p t = round ->
+    CountMsgs (cond_precommit p Bk round (roundStartTime p round) t) (extract_sender) (incomingMessages p) >= n_maj ->
+    (forall t':nat, t'<t -> is_committedTime p t' = false) ->
+    is_committedTime p t = true.
+
+Hypothesis commitAtMostOnce: 
+    forall p:person, forall t:nat, forall t':nat,
+    In p replicas ->
+    isHonest p = true ->
+    is_committedTime p t = true ->
+    t<=t' ->
+    is_committedTime p t' = false.
+
+(* the following two assumptions are necessary. *)
+
+Hypothesis commitOnlyIfReceiving:
+    forall p: person, forall t: nat,
+        In p replicas ->
+        isHonest p = true ->
+        is_committedTime p t = true ->
+        (exists Bk:blockType, exists round:nat, 
+        (round >= 1) /\ (currentRound p t = round) /\ (CountMsgs (cond_precommit p Bk round (roundStartTime p round) t) (extract_sender) (incomingMessages p) >= n_maj)).
+
+
+Hypothesis quitAfterConflict:
+    forall p:person, forall t1 t2: nat, forall r:nat, 
+    forall Bk Bk':blockType, forall cert cert':certType, forall sender sender':person,
+    In p replicas ->
+    isHonest p = true ->
+    r >= 1 ->
+    currentRound p t1 <= r ->
+    currentRound p t2 <= r ->
+    t1 <= t2 ->
+    In (sender, p, (propose Bk r cert (leaderOfRound r)), t1) (incomingMessages p) -> 
+    In (sender', p, (propose Bk' r cert' (leaderOfRound r)) t2) (incomingMessages p) ->  
+    conflict p (leaderOfRound r) Bk r cert t1 (sender', p, (propose Bk' r cert' (leaderOfRound r)), t2) = true ->
+    hasQuit p t2 = true.
+
+(* the following two assumptions are necessary. *)
+
+Theorem precommit_only_once: 
+    forall p: person, forall anyone:person, forall round: nat, forall t: nat, forall Bk: blockType,
+        In p replicas ->
+        In anyone replicas ->
+        round >= 1 ->
+        isHonest p = true ->
+        In (p, anyone, (precommit Bk round p), t) (outgoingMessages p) ->
+        (currentRound p t = round) /\
+        (precommitOfMembers p round = precommitConstructor Bk).
+accept.
+Qed.
+
 
 
 

@@ -1,0 +1,6 @@
+DIGEST 7d511ef38d0b956fa64e34452958d590
+FNode
+sec 8:11 <> Node
+def 26:29 <> name
+R34:36 Coq.Init.Datatypes <> nat ind
+R45:48 Node Node <> sec
