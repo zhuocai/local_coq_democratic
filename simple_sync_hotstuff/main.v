@@ -180,7 +180,8 @@ Record Event: Type := mkEvent {
 
 
 Variable event_happen_before: Event -> Event -> Prop.
-Variable direct_pred: Event -> option Event. 
+Variable direct_pred: Event -> option Event. (* the pred of the first event is None *) 
+Variable direct_next: Event -> option Event. (* the next of the last event is None | commit might not be the last event. | If any messages or timeout trigger afterwards, do it. *)
 
 Variable event_to_history: Event-> list Event. 
 
@@ -936,13 +937,13 @@ Theorem safety:
         e1.(ev_time) <= e2.(ev_time) ->
         (let state1 := state_after_event e1 in 
         let state2 := state_after_event e2 in
-        state1.(st_committed) = true -> state2.(st_committed) = true) /\
-        match state1.(st_first_valid_proposal), state2.(st_first_valid_proposal) with
+        (state1.(st_committed) = true -> state2.(st_committed) = true) /\
+        (match state1.(st_first_valid_proposal), state2.(st_first_valid_proposal) with
         | Some p1, Some p2 => p1.(p_block) = p2.(p_block)
         | Some p1, None => False
         | None, _ => True
-        end.
-
+        end)).
+Admitted.
 
 (* for liveness, require extending events. *)
 Theorem liveness: 
@@ -950,6 +951,7 @@ Theorem liveness:
     n<1+2*n_faulty ->
     isHonest n = true ->
     exists e:Event, e.(ev_node) = n /\ (let state:= state_after_event e in state.(st_committed)=true).
+Admitted.
 
 
 End SyncHotStuff.
