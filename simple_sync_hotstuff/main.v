@@ -100,7 +100,8 @@ Inductive MsgContentType : Type :=
     | msg_vote (vote: VoteType)
     | msg_precommit (precommit: PrecommitType)
     | msg_blame (blame:BlameType)
-    | msg_quit (qt: QuitType). 
+    | msg_quit (qt: QuitType)
+    | msg_highest_cert (cert:Certificate). 
 
 Definition msgcontent_type_beq (msgc1 msgc2:MsgContentType):bool:=
     match msgc1, msgc2 with
@@ -109,6 +110,7 @@ Definition msgcontent_type_beq (msgc1 msgc2:MsgContentType):bool:=
     | msg_precommit pc1, msg_precommit pc2 => precommit_beq pc1 pc2
     | msg_blame b1, msg_blame b2 => blame_beq b1 b2
     | msg_quit qt1, msg_quit qt2 => quittype_beq qt1 qt2
+    | msg_highest_cert c1, msg_highest_cert c2 => certificate_beq c1 c2
     | _, _ => false
     end.
 
@@ -160,6 +162,8 @@ Definition timeouttype_beq (t1 t2: TimeoutType): bool :=
 Inductive TriggerType: Type:= 
     | trigger_msg_receive (msg: MsgType)
     | trigger_timeout (timeout: TimeoutType) (node:Node) (round: nat) (expire_time: nat). 
+
+
 
 Definition triggertype_beq (t1 t2: TriggerType): bool :=
     match t1, t2 with
@@ -235,20 +239,71 @@ Record StateType: Type := mkState {
     st_vote: option VoteType;
     st_precommit_time: option nat; (* start precommit timer*)
     st_received_precommits_from: list Node;
+    st_new_view_timeouted: bool;
 
 }.
 
 (* use the following interfaces to modify some fields of the state *)
 
-Definition state_set_first_proposal (curr_state:StateType) (proposal:ProposalType) (time: nat) (msg_sender: Node) (node:Node): StateType :=
-    mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) true (Some time) (Some proposal) [msg_sender] curr_state.(st_has_quited_round) curr_state.(st_quit_round_time) curr_state.(st_received_blames)  (Some mkVoteType proposal.(p_block) proposal.(p_round) node) curr_state.(st_has_precommitted) curr_state.(st_precommit_time) curr_state.(st_received_precommits_from).
+Definition state_set_first_received_proposal (curr_state:StateType) (proposal:ProposalType): StateType:=
+    mkState curr_state.(st_round) 
+    curr_state.(st_committed) 
+    curr_state.(st_locked_highest_cert)
+    curr_state.(st_dynamic_highest_cert)
+    curr_state.(st_all_certs) 
+    curr_state.(st_round_start_time)
+    curr_state.(st_first_valid_proposal)
+    (Some proposal) (*curr_state.(st_first_received_proposals) *)
+    curr_state.(st_receive_valid_proposals_from)
+    curr_state.(st_quit_round_time)
+    curr_state.(st_received_blames) 
+    curr_state.(st_vote) 
+    curr_state.(st_precommit_time) 
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
+
+Definition state_set_first_valid_proposal (curr_state:StateType) (proposal:ProposalType) (msg_sender: Node) (node:Node): StateType :=
+    mkState curr_state.(st_round) 
+    curr_state.(st_committed) 
+    curr_state.(st_locked_highest_cert)
+    curr_state.(st_dynamic_highest_cert)
+    curr_state.(st_all_certs) 
+    curr_state.(st_round_start_time)
+    (*set curr_state.(st_first_valid_proposal)*)
+    (Some proposal)
+    (* curr_state.(st_first_received_proposals)  *)
+    (Some proposal)
+    (* curr_state.(st_receive_valid_proposals_from) *)
+    [msg_sender]
+    curr_state.(st_quit_round_time)
+    curr_state.(st_received_blames) 
+    (* curr_state.(st_vote)  *)
+    (Some (mkVoteType proposal.(p_block) proposal.(p_round) node))
+    curr_state.(st_precommit_time) 
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
 
 (* handle repetition. *)
-(* when it reaches f+1. will set precommitted. If set precommitted, will not call this function again. *)
+(* *)
 Definition state_set_more_proposals (curr_state:StateType) (proposal: ProposalType)  (msg_sender: Node): StateType:=
-    if is_element msg_sender curr_state.(st_receive_proposals_from) then curr_state
+    if is_element msg_sender curr_state.(st_receive_valid_proposals_from) then curr_state
     else 
-        mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) (msg_sender::curr_state.(st_receive_proposals_from)) curr_state.(st_has_quited_round) curr_state.(st_quit_round_time) curr_state.(st_received_blames) curr_state.(st_vote) curr_state.(st_has_precommitted) curr_state.(st_precommit_time) curr_state.(st_received_precommits_from).
+        mkState curr_state.(st_round) 
+        curr_state.(st_committed) 
+        curr_state.(st_locked_highest_cert)
+        curr_state.(st_dynamic_highest_cert)
+        curr_state.(st_all_certs) 
+        curr_state.(st_round_start_time)
+        curr_state.(st_first_valid_proposal)
+        curr_state.(st_first_received_proposals) 
+        (* curr_state.(st_receive_valid_proposals_from) *)
+        (msg_sender::curr_state.(st_receive_valid_proposals_from))
+        curr_state.(st_quit_round_time)
+        curr_state.(st_received_blames) 
+        curr_state.(st_vote) 
+        curr_state.(st_precommit_time) 
+        curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
 
 Definition blames_to_blamers: list BlameType -> list Node := 
     map (fun b => b.(b_blamer)).
@@ -256,21 +311,90 @@ Definition blames_to_blamers: list BlameType -> list Node :=
 Definition state_set_receive_blame (curr_state:StateType) (blame:BlameType) : StateType :=
     if is_element blame.(b_blamer) (blames_to_blamers curr_state.(st_received_blames)) then curr_state
     else 
-        mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) curr_state.(st_receive_proposals_from) curr_state.(st_has_quited_round) curr_state.(st_quit_round_time) (blame::curr_state.(st_received_blames)) curr_state.(st_vote) curr_state.(st_has_precommitted) curr_state.(st_precommit_time) curr_state.(st_received_precommits_from).
+        mkState curr_state.(st_round) 
+    curr_state.(st_committed) 
+    curr_state.(st_locked_highest_cert)
+    curr_state.(st_dynamic_highest_cert)
+    curr_state.(st_all_certs) 
+    curr_state.(st_round_start_time)
+    curr_state.(st_first_valid_proposal)
+    curr_state.(st_first_received_proposals) 
+    curr_state.(st_receive_valid_proposals_from)
+    curr_state.(st_quit_round_time) 
+    (blame::curr_state.(st_received_blames)) (*set*)
+    curr_state.(st_vote) 
+    curr_state.(st_precommit_time) 
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
 
 Definition state_set_receive_qt (curr_state:StateType) (qt:QuitType) (time: nat): StateType :=
-    match qt with
-    | quit_conflict qc => 
-        mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) curr_state.(st_receive_proposals_from) true (Some time) curr_state.(st_received_blames) curr_state.(st_vote) curr_state.(st_has_precommitted) curr_state.(st_precommit_time) curr_state.(st_received_precommits_from)
-    | quit_blame qb => 
-        mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) curr_state.(st_receive_proposals_from) true (Some time) curr_state.(st_received_blames) curr_state.(st_vote) curr_state.(st_has_precommitted) curr_state.(st_precommit_time) curr_state.(st_received_precommits_from)
-    end.
+    mkState curr_state.(st_round) 
+    curr_state.(st_committed) 
+    curr_state.(st_locked_highest_cert)
+    curr_state.(st_dynamic_highest_cert)
+    curr_state.(st_all_certs) 
+    curr_state.(st_round_start_time)
+    curr_state.(st_first_valid_proposal)
+    curr_state.(st_first_received_proposals) 
+    curr_state.(st_receive_valid_proposals_from)
+    (Some time) (*set*)
+    curr_state.(st_received_blames) 
+    curr_state.(st_vote) 
+    curr_state.(st_precommit_time) 
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
 
 Definition state_set_quit_blame (curr_state:StateType) (time: nat): StateType :=
-    mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) curr_state.(st_receive_proposals_from) true (Some time) curr_state.(st_received_blames) curr_state.(st_vote) curr_state.(st_has_precommitted) curr_state.(st_precommit_time) curr_state.(st_received_precommits_from).
+    mkState curr_state.(st_round) 
+    curr_state.(st_committed) 
+    curr_state.(st_locked_highest_cert)
+    curr_state.(st_dynamic_highest_cert)
+    curr_state.(st_all_certs) 
+    curr_state.(st_round_start_time)
+    curr_state.(st_first_valid_proposal)
+    curr_state.(st_first_received_proposals) 
+    curr_state.(st_receive_valid_proposals_from)
+    (Some time) (*set*)
+    curr_state.(st_received_blames) 
+    curr_state.(st_vote) 
+    curr_state.(st_precommit_time) 
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
+
+Definition state_set_quit_conflict (curr_state:StateType) (time: nat): StateType :=
+    mkState curr_state.(st_round) 
+    curr_state.(st_committed) 
+    curr_state.(st_locked_highest_cert)
+    curr_state.(st_dynamic_highest_cert)
+    curr_state.(st_all_certs) 
+    curr_state.(st_round_start_time)
+    curr_state.(st_first_valid_proposal)
+    curr_state.(st_first_received_proposals) 
+    curr_state.(st_receive_valid_proposals_from)
+    (Some time) (*set*)
+    curr_state.(st_received_blames) 
+    curr_state.(st_vote) 
+    curr_state.(st_precommit_time) 
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
 
 Definition state_set_precommit_start (curr_state:StateType) (time:nat):StateType:=
-    mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) curr_state.(st_receive_proposals_from) curr_state.(st_has_quited_round) curr_state.(st_quit_round_time) curr_state.(st_received_blames) curr_state.(st_vote) true (Some time) curr_state.(st_received_precommits_from).
+    mkState curr_state.(st_round) 
+    curr_state.(st_committed) 
+    curr_state.(st_locked_highest_cert)
+    curr_state.(st_dynamic_highest_cert)
+    curr_state.(st_all_certs) 
+    curr_state.(st_round_start_time)
+    curr_state.(st_first_valid_proposal)
+    curr_state.(st_first_received_proposals) 
+    curr_state.(st_receive_valid_proposals_from)
+    curr_state.(st_quit_round_time)
+    curr_state.(st_received_blames) 
+    curr_state.(st_vote) 
+    (* curr_state.(st_precommit_time)  *)
+    (Some time)
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
 
 Definition update_all_certs (all_certs: nat -> BlockType -> list Node) (new_vote: VoteType): nat -> BlockType -> list Node :=
     fun r b => 
@@ -297,7 +421,9 @@ Definition state_set_receive_vote (curr_state:StateType) (vote:VoteType):StateTy
     curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert) 
+    (* curr_state.(st_dynamic_highest_cert) *)
     (update_highest_cert curr_state.(st_dynamic_highest_cert) curr_state.(st_all_certs) vote) 
+    (* curr_state.(st_all_certs) *)
     (update_all_certs curr_state.(st_all_certs) vote) 
     curr_state.(st_round_start_time) 
     curr_state.(st_first_valid_proposal) 
@@ -307,14 +433,16 @@ Definition state_set_receive_vote (curr_state:StateType) (vote:VoteType):StateTy
     curr_state.(st_received_blames) 
     curr_state.(st_vote) 
     curr_state.(st_precommit_time) 
-    curr_state.(st_received_precommits_from).
+    curr_state.(st_received_precommits_from)
+    curr_state.(st_new_view_timeouted).
 
+(* also set the locked highest cert *)
 Definition state_set_enter_new_round (curr_state:StateType) (time: nat): StateType :=
     mkState (curr_state.(st_round)+1) false 
-    curr_state.(st_dynamic_highest_cert) 
+    curr_state.(st_dynamic_highest_cert) (*set locked highest cert*) 
     curr_state.(st_dynamic_highest_cert)
     curr_state.(st_all_certs) 
-    time None None [] None [] None None [].
+    time None None [] None [] None None [] false.
 
 (* collect and count |
 Question: is it possible to receive precommit before receiving a proposal? 
@@ -323,29 +451,101 @@ If no valid proposal is received at t => no valid proposal is received at any ho
 Definition state_set_receive_precommit (curr_state:StateType) (precommit: PrecommitType) : StateType :=
     if is_element precommit.(pc_voter) curr_state.(st_received_precommits_from) then curr_state
     else 
-        mkState curr_state.(st_round) curr_state.(st_committed) curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) curr_state.(st_receive_proposals_from) curr_state.(st_has_quited_round) curr_state.(st_quit_round_time) curr_state.(st_received_blames) curr_state.(st_vote) curr_state.(st_has_precommitted) curr_state.(st_precommit_time)  (precommit.(pc_voter)::curr_state.(st_received_precommits_from)).
+        mkState
+        curr_state.(st_round) 
+        curr_state.(st_committed) 
+        curr_state.(st_locked_highest_cert) 
+        curr_state.(st_dynamic_highest_cert)
+        curr_state.(st_all_certs)
+        curr_state.(st_round_start_time) 
+        curr_state.(st_first_valid_proposal) 
+        curr_state.(st_first_received_proposals)
+        curr_state.(st_receive_valid_proposals_from) 
+        curr_state.(st_quit_round_time) 
+        curr_state.(st_received_blames) 
+        curr_state.(st_vote) 
+        curr_state.(st_precommit_time) 
+        (* curr_state.(st_received_precommits_from) *)
+        (precommit.(pc_voter)::curr_state.(st_received_precommits_from))
+        curr_state.(st_new_view_timeouted).
 
 (* commit the current proposal. *)
 
 
 (* once committed, the state of the node will not change any more. The committed proposal is exactly curr_state.(st_current_proposal)*)
 Definition state_set_commit (curr_state:StateType) (time:nat) : StateType :=
-    mkState curr_state.(st_round) true curr_state.(st_highest_cert) curr_state.(st_all_certs) curr_state.(st_round_start_time) curr_state.(st_has_received_proposal) curr_state.(st_proposal_receive_time) curr_state.(st_current_proposal) curr_state.(st_receive_proposals_from) curr_state.(st_has_quited_round) curr_state.(st_quit_round_time) curr_state.(st_received_blames) curr_state.(st_vote) curr_state.(st_has_precommitted) curr_state.(st_precommit_time) curr_state.(st_received_precommits_from).
+    mkState
+        curr_state.(st_round) 
+        (* curr_state.(st_committed)  *)
+        true
+        curr_state.(st_locked_highest_cert) 
+        curr_state.(st_dynamic_highest_cert)
+        curr_state.(st_all_certs)
+        curr_state.(st_round_start_time) 
+        curr_state.(st_first_valid_proposal) 
+        curr_state.(st_first_received_proposals)
+        curr_state.(st_receive_valid_proposals_from) 
+        curr_state.(st_quit_round_time) 
+        curr_state.(st_received_blames) 
+        curr_state.(st_vote) 
+        curr_state.(st_precommit_time) 
+        curr_state.(st_received_precommits_from)
+        curr_state.(st_new_view_timeouted).
 
-(* state transition rule applies to any node. *)
-(* Byzantine nodes can arbitrarily send messages. (for honest nodes, every trigger must be generated fairly, except messages sent by Byzantine nodes.) *)
+Definition state_set_dynamic_highest_cert (curr_state:StateType) (cert:Certificate): StateType :=
+    mkState
+        curr_state.(st_round) 
+        curr_state.(st_committed)
+        curr_state.(st_locked_highest_cert) 
+        (Some cert)
+        curr_state.(st_all_certs)
+        curr_state.(st_round_start_time) 
+        curr_state.(st_first_valid_proposal) 
+        curr_state.(st_first_received_proposals)
+        curr_state.(st_receive_valid_proposals_from) 
+        curr_state.(st_quit_round_time) 
+        curr_state.(st_received_blames) 
+        curr_state.(st_vote) 
+        curr_state.(st_precommit_time) 
+        curr_state.(st_received_precommits_from)
+        curr_state.(st_new_view_timeouted).
 
-(* state transition rule applies to any node. *)
-(* Byzantine nodes can arbitrarily send messages. (for honest nodes, every trigger must be generated fairly, except messages sent by Byzantine nodes.) *)
+Definition state_set_recv_cert (curr_state:StateType) (cert:Certificate): StateType:=
+    match curr_state.(st_dynamic_highest_cert) with 
+    | None =>  state_set_dynamic_highest_cert curr_state cert
+    | Some old_cert => 
+        if old_cert.(c_round) <? cert.(c_round) then state_set_dynamic_highest_cert curr_state cert
+        else curr_state
+    end.
 
-
+Definition state_set_new_view_timeout (curr_state:StateType): StateType:=
+    mkState
+        curr_state.(st_round) 
+        curr_state.(st_committed)
+        curr_state.(st_locked_highest_cert)
+        curr_state.(st_dynamic_highest_cert)
+        curr_state.(st_all_certs)
+        curr_state.(st_round_start_time) 
+        curr_state.(st_first_valid_proposal) 
+        curr_state.(st_first_received_proposals)
+        curr_state.(st_receive_valid_proposals_from) 
+        curr_state.(st_quit_round_time) 
+        curr_state.(st_received_blames) 
+        curr_state.(st_vote) 
+        curr_state.(st_precommit_time) 
+        curr_state.(st_received_precommits_from)
+        (* curr_state.(st_new_view_timeouted). *)
+        true.
 
 
 (* checks proposal round, leader-proposer, cert*)
-Definition is_proposal_valid (proposal: ProposalType) (curr_state: StateType): bool := 
-    Nat.eqb proposal.(p_round) curr_state.(st_round) && Nat.eqb proposal.(p_proposer)  (leaderOfRound curr_state.(st_round)) 
+Definition is_proposal_valid_round_proposer (proposal: ProposalType) (curr_state: StateType): bool := 
+    Nat.eqb proposal.(p_round) curr_state.(st_round) && Nat.eqb proposal.(p_proposer)  (leaderOfRound curr_state.(st_round)).
+
+Definition is_proposal_valid_cert (proposal: ProposalType) (curr_state: StateType): bool := 
+    is_proposal_valid_round_proposer proposal curr_state 
     && (
-        match curr_state.(st_highest_cert) with
+        match curr_state.(st_locked_highest_cert) with
         | None => true
         | Some cert => cert.(c_round) <=? proposal.(p_round)
         end
@@ -376,6 +576,45 @@ Definition is_proposal_valid (proposal: ProposalType) (curr_state: StateType): b
 
  *)
 
+ Definition state_transition_receive_proposal (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+    | Some(trigger_msg_receive msg) =>
+    match msg.(msg_content) with
+    | msg_propose proposal =>
+        match curr_state.(st_first_received_proposals) with
+        | None  =>
+            if is_proposal_valid_cert proposal curr_state then
+                state_set_first_valid_proposal curr_state proposal  msg.(msg_sender) e.(ev_node)
+            else if is_proposal_valid_round_proposer proposal curr_state then
+                state_set_first_received_proposal curr_state proposal
+            else curr_state
+        | Some first_proposal =>
+            if proposal_beq proposal first_proposal then (*receiving the same first proposal again*)
+                match curr_state.(st_first_valid_proposal) with 
+                | None => curr_state (*receiving the same cert-invalid proposal, ignore*)
+                | Some valid_proposal => (* the first proposal is valid, now receiving one more proposal that is the same. *)
+                    if proposal_beq proposal valid_proposal then 
+                        if 1+n_faulty <=? (length curr_state.(st_receive_valid_proposals_from)) then (*already pre-committed. ignore the msg*)
+                            curr_state
+                        else (*need more proposals*)
+                            let temp_state := state_set_more_proposals curr_state proposal msg.(msg_sender) in
+                            if (1+n_faulty) <=? (length (temp_state.(st_receive_valid_proposals_from))) then (*trigger precommit start*) 
+                                state_set_precommit_start temp_state e.(ev_time)
+                        else temp_state
+                    else (* should not happen in our logic *)
+                        curr_state
+                end
+            else (* receiving a different proposal | totally-invalid or cert-invalid or valid | total_invalid => ignore / otherwise => duplicate report quit *)
+                if is_proposal_valid_round_proposer proposal curr_state then
+                    state_set_quit_conflict curr_state e.(ev_time)
+                else curr_state
+        end
+    | _ => curr_state (*other msg type*)
+    end
+    | _ => curr_state (*other trigger type*)
+    end.
+    
+
 Definition state_transition (e: Event) (curr_state: StateType) : StateType := 
     if curr_state.(st_committed) then curr_state 
     else match curr_state.(st_quit_round_time) with 
@@ -399,7 +638,7 @@ Definition state_transition (e: Event) (curr_state: StateType) : StateType :=
             | _ => curr_state
             end
         end
-    | None =>
+    | None => (* has not quitted or committed *)
         match e.(ev_trigger) with
         | None => curr_state
         | Some(trigger_msg_receive msg) =>
@@ -423,51 +662,39 @@ Definition state_transition (e: Event) (curr_state: StateType) : StateType :=
                     else temp_state
                 else curr_state
             | msg_propose proposal =>
-                if negb curr_state.(st_has_received_proposal) then 
-                    if is_proposal_valid proposal curr_state then
-                        state_set_first_valid_proposal curr_state proposal e.(ev_time) msg.(msg_sender) e.(ev_node)
-                    else curr_state
-                else if negb curr_state.(st_has_precommitted) then
-                    match curr_state.(st_current_proposal) with
-                        | None => curr_state (*should not happen*)
-                        | Some curr_proposal =>
-                        if proposal_beq proposal curr_proposal then 
-                            let temp_state := state_set_more_proposals curr_state proposal msg.(msg_sender) in
-                            if (1+n_faulty) <=? (length (temp_state.(st_receive_proposals_from))) then 
-                                state_set_precommit_start temp_state e.(ev_time)
-                            else temp_state
-                        else curr_state (* should qc conflict*)
-                    end
-                else (* has precommitted _started the timer | TODO check conflict qc. *)
-                    curr_state
+                state_transition_receive_proposal e curr_state
             | msg_vote vote => (* vote is used to form certificates  *)
                 state_set_receive_vote curr_state vote
             | msg_precommit precommit => (*require at least received proposal*)
-                if (precommit.(pc_round) =? curr_state.(st_round)) && curr_state.(st_has_received_proposal) then
-                    let temp_state:= state_set_receive_precommit curr_state precommit in
-                        (* if receiving f+1 precommit msg, really commit*)
-                        if (1+n_faulty) <=? (length temp_state.(st_received_precommits_from)) then
-                            state_set_commit temp_state e.(ev_time)
-                        else temp_state
-                    
+                if (precommit.(pc_round) =? curr_state.(st_round)) then 
+                    match curr_state.(st_first_valid_proposal) with 
+                        | None => curr_state 
+                        | Some valid_proposal =>
+                        if (valid_proposal.(p_block) =? precommit.(pc_block)) then 
+                            let temp_state:= state_set_receive_precommit curr_state precommit in (* if curr_state has received f+1 precommits already, would have committed. will not enter this function*)
+                            if (1+n_faulty) <=? (length temp_state.(st_received_precommits_from)) then
+                                state_set_commit temp_state e.(ev_time)
+                            else temp_state
+                        else curr_state (* ignore precommit for other proposals*)
+                    end
+                else curr_state (*ignore precommit for other rounds*)
+            | msg_highest_cert cert => 
+                if e.(ev_node) =? (leaderOfRound curr_state.(st_round)) then 
+                    if curr_state.(st_new_view_timeouted) then curr_state (*too late*)
+                        else state_set_recv_cert curr_state cert
                 else curr_state
             end     
         | Some(trigger_timeout timeout t_node t_round t_expire_time) =>
             match timeout with
                 | timeout_proposal => 
-                    if (t_round =? curr_state.(st_round)) && curr_state.(st_has_received_proposal) then 
-                        curr_state
-                    else (* send blame out *)
-                        curr_state
+                    curr_state (* might send blame out | but handled in generating trigger*)
                 | timeout_precommit =>
-                    if (t_round =? curr_state.(st_round)) && negb curr_state.(st_has_quited_round) then (*sending precommit msg*)
-                        curr_state
-                    else curr_state
+                    curr_state (* might send precommit message | but handled in generating trigger *)
                 | timeout_quit_status =>
-                    curr_state (* should not be in quit*)
+                    curr_state (* should not happen | already handled in the beginning of the function *)
                 | timeout_new_view_wait =>
-                    (* broadcast new proposal*)
-                    curr_state
+                    (* should broadcast new proposals | to handle in generating trigger *)
+                    state_set_new_view_timeout curr_state
             end
         end
     end.
@@ -481,7 +708,20 @@ Variable state_after_event: Event -> StateType.
 Variable timeouts_after_event: Event -> option (list TimeoutType). *)
 
 Hypothesis init_state_def: 
-    init_state.(st_round) = 0 /\ init_state.(st_committed) = false /\ init_state.(st_highest_cert) = None /\ init_state.(st_all_certs) = (fun r b => []) /\ init_state.(st_round_start_time) = 0 /\ init_state.(st_has_received_proposal) = false /\ init_state.(st_proposal_receive_time) = None /\ init_state.(st_current_proposal) = None /\ init_state.(st_receive_proposals_from) = [] /\ init_state.(st_has_quited_round) = false /\ init_state.(st_quit_round_time) = None /\ init_state.(st_received_blames) = [] /\ init_state.(st_vote) = None /\ init_state.(st_has_precommitted) = false /\ init_state.(st_precommit_time) = None /\ init_state.(st_received_precommits_from) = [].
+    init_state.(st_round) = 0 /\ 
+    init_state.(st_committed) = false /\ 
+    init_state.(st_locked_highest_cert) = None /\ 
+    init_state.(st_dynamic_highest_cert) = None /\ 
+    init_state.(st_all_certs) = (fun r b => []) /\ 
+    init_state.(st_round_start_time) = 0 /\ 
+    init_state.(st_first_valid_proposal) = None /\
+    init_state.(st_first_received_proposals) = None /\
+    init_state.(st_receive_valid_proposals_from) = [] /\
+    init_state.(st_quit_round_time) = None /\
+    init_state.(st_received_blames) = [] /\
+    init_state.(st_vote) = None /\
+    init_state.(st_precommit_time) = None /\
+    init_state.(st_received_precommits_from) = [].
 
 Hypothesis state_before_first_event:
     forall e:Event, direct_pred e = None -> state_before_event e = init_state.
@@ -536,13 +776,7 @@ Hypothesis honest_event_triggered_by_timeout_of_itself:
 
 (* default first block is 1 *)
 
-Hypothesis trigger_generated_by_first_event:
-    forall n:Node, (1<=n<2*n_faulty +1 -> 
-    ((triggers_generated_by_event (first_events n)) = [(trigger_timeout timeout_proposal n 0 (2*delta))])) /\
-    (
-        let recipient_to_msg:= fun n => trigger_msg_receive ( mkMsgType 0 n (msg_propose (mkProposalType 1 0 None 0)) 0) in
-    
-    triggers_generated_by_event (first_events 0) = ((trigger_timeout timeout_proposal n 0 (2*delta)) :: (map recipient_to_msg replicas))).
+
 
 
 Variable event_ancestor: Event -> Event. 
@@ -583,39 +817,139 @@ Definition node_to_msg (sender:Node) (content:MsgContentType) (send_time:nat) (n
 Definition broadcast_msgs (sender:Node) (content:MsgContentType) (send_time: nat): list MsgType :=
     map (node_to_msg sender content send_time) replicas. 
 
-Hypothesis triggers_generation_def:
-    forall e:Event, triggers_generated_by_event e = 
-    not direct_pred e = None ->
-    isHonest e.(ev_node) -> 
-    let prev_state:= state_before_event e in
-    let curr_state:= state_after_event e in 
-    match e.(ev_trigger) with
-    | None => []
-    | Some trigger => 
-        match trigger with
-        | trigger_msg_receive msg =>
-            match msg.(msg_content) with
-            | msg_propose proposal => (* cases in reverse-time order *)
-                if prev_state.(st_has_quited_round) then []
-                else if prev_state.(st_has_precommitted) then 
-                (*has not quitted, will not quit*)
-                    if proposal_beq proposal (prev_state.curr_proposal)
-                if negb prev_state.(st_has_received_proposal) then 
-                    if  curr_state.(st_has_received_proposal) then (*the first proposal received | state_transition makes sure the validity check pass *)
-                    (broadcast_msgs e.(ev_node) (msg_propose proposal) e.(ev_time)) ++ (broadcast_msgs e.(ev_node) (msg_vote curr_state.(st_vote)) e.(ev_time)) 
-                    else (*the proposal is invalid. Reasons of invalid: (1) round wrong, (2) proposer is not leader, (3) certificate check fails. Maybe if only the certificate check fails, the node should also forward it. ISSUE: I am afraid this can cause infinite forwarding. What is the rule? Solution: do not forward if certificate check fails. *) []
-                else (* has received proposal*)
-                
-                
-                
+Definition broadcast_msgs_to_trigger_list (sender:Node) (content:MsgContentType) (send_time: nat): list TriggerType :=
+    map (fun msg => trigger_msg_receive msg) (broadcast_msgs sender content send_time).
+
+Definition triggers_generated_by_receiving_a_proposal_def (e:Event) (proposal:ProposalType) (prev_state:StateType) (new_state:StateType): list TriggerType :=
+    []
+
+.
+
+
+(* no worries about forwarding quit messages multiple times: once quit (recv f+1 blame or recv quit), forward it, then never handle the following*)
+Definition triggers_generated_by_receiving_def (e: Event) (msg:MsgType) (prev_state:StateType) (new_state:StateType): list TriggerType :=
+    match msg.(msg_content) with
+    | msg_propose proposal =>
+        triggers_generated_by_receiving_a_proposal_def e proposal prev_state new_state
+    | msg_vote vote =>
+        [] (*just form certificates locally*)
+    | msg_blame blame => (* if forming f+1 blames, broadcast quit blame*)
+        if (length (prev_state.(st_received_blames)) <=? n_faulty) && (1+n_faulty <=? (length (new_state.(st_received_blames)))) then 
+            broadcast_msgs_to_trigger_list e.(ev_node) (msg_quit (quit_blame (mkQuitBlameType prev_state.(st_round) new_state.(st_received_blames)))) e.(ev_time)
+        else []
+    | msg_quit qt =>
+        (broadcast_msgs_to_trigger_list e.(ev_node) (msg_quit qt) e.(ev_time)) ++ 
+        [trigger_timeout timeout_quit_status e.(ev_node) (prev_state.(st_round)) (e.(ev_time) + delta)] (*forward & timer*)
+    | msg_highest_cert cert =>
+        [] (*just update the dynamic highest cert*)
+    | msg_precommit precommit =>
+        [] (*just collect precommits | will commit locally if reach f+1*)
+    end
+    .
+
+Variable honest_default_proposal_of_round: nat -> BlockType.
+
+Definition triggers_generated_by_timout_def (e:Event) (timeout:TimeoutType) (node:Node) (round:nat) (expire_time:nat) (prev_state:StateType) (new_state:StateType): list TriggerType :=
+    match timeout with
+    | timeout_proposal => 
+        match prev_state.(st_first_valid_proposal) with 
+        | None =>  
+            broadcast_msgs_to_trigger_list e.(ev_node) (msg_blame (mkBlameType round e.(ev_node))) e.(ev_time)
+        | Some valid_proposal => [] (*already received a valid proposal*)
+        end
+    | timeout_precommit => (* broadcast precommit message if condition matches*)
+        match prev_state.(st_quit_round_time) with
+        | None => 
+            match prev_state.(st_first_valid_proposal) with
+            | None => [] (*shuold not happen. If h precommits, it must have received a valid proposal *)
+            | Some valid_proposal => broadcast_msgs_to_trigger_list e.(ev_node) (msg_precommit (mkPrecommitType valid_proposal.(p_block) round e.(ev_node))) e.(ev_time)
             end
-        | trigger_timeout timeout node round expire_time =>
-            
+        | Some quit_time => [] (*do nothing because have quitted. | Shouldn't be called*)
+        end
+    | timeout_quit_status => [] (* handled elsewhere during quit *)
+    | timeout_new_view_wait => (* check if the trigger is successful. Should be successful. *)
+        if (e.(ev_node) =? (leaderOfRound new_state.(st_round))) && (negb prev_state.(st_new_view_timeouted)) && (new_state.(st_new_view_timeouted)) then 
+            let new_proposal := 
+            match new_state.(st_dynamic_highest_cert) with 
+            | None => mkProposalType (honest_default_proposal_of_round (prev_state.(st_round))) (prev_state.(st_round)+1) None e.(ev_time)
+            | Some cert => mkProposalType cert.(c_block) (prev_state.(st_round)) (Some cert) e.(ev_time)
+            end in
+            broadcast_msgs_to_trigger_list e.(ev_node) (msg_propose new_proposal) e.(ev_time)
+        else [] (*only leader sends proposal*)
+    end.
+    
+
+(* the first event is the ancestor of all events. *)
+    
+Definition triggers_of_first_event (n: Node) : list TriggerType :=
+    if  1<=?n then 
+    [(trigger_timeout timeout_proposal n 0 (2*delta))]
+    else [(trigger_timeout timeout_proposal n 0 (2*delta))] ++ (broadcast_msgs_to_trigger_list 0 (msg_propose (mkProposalType 1 0 None 0)) 0).
+
+(* applies to only honest replicas *)
+Definition triggers_generation_def (e:Event): list TriggerType :=
+    (* first event is define else where *)
+    match direct_pred e with 
+    | None => triggers_of_first_event e.(ev_node) 
+    | Some e_pred =>
+        let prev_state := state_before_event e in
+        let new_state := state_after_event e in
+        if prev_state.(st_committed) then []
+        else match prev_state.(st_quit_round_time) with
+        | Some quit_time => 
+            match e.(ev_trigger) with
+            | Some  (trigger_timeout timeout_type node round expire_time) =>
+                match timeout_type with
+                | timeout_quit_status =>
+                    if prev_state.(st_round) <? new_state.(st_round) then (*enter new round, will send locked highest cert to new leader*) 
+                    match (new_state.(st_locked_highest_cert)) with
+                    | None => [] (*no cert . don't need send*)
+                    | Some cert =>
+                        [(trigger_msg_receive (mkMsgType e.(ev_node) (leaderOfRound (prev_state.(st_round)+1)) (msg_highest_cert cert) e.(ev_time)))]
+                    end
+                    else []
+                | _ => [] (*ignore other triggers*)
+                end
+            | _ => [] (* no generated trigger in other events *)
+            end
+        | None => [] (*not quitted*)
+            match e.(ev_trigger) with
+            | Some trigger => 
+                    match trigger with
+                    | trigger_msg_receive msg => triggers_generated_by_receiving_def e msg prev_state new_state
+                    | trigger_timeout timeout node round expire_time => 
+                        if round=? prev_state.(st_round) then triggers_generated_by_timout_def e timeout node round expire_time prev_state new_state
+                        else [] (*ignore timeout for other rounds*)
+                    end
+            | None => [] (* should not happen for honest nodes*)
+            end
         end
     end.
 
 Hypothesis actual_cert_require_majority:
     forall cert: Certificate, length cert.(c_voters) >= 1+n_faulty.
+
+
+Theorem safety: 
+    forall e1 e2: Event, 
+        isHonest (e1.(ev_node)) = true -> isHonest (e2.(ev_node)) = true ->
+        e1.(ev_time) <= e2.(ev_time) ->
+        (let state1 := state_after_event e1 in 
+        let state2 := state_after_event e2 in
+        state1.(st_committed) = true -> state2.(st_committed) = true) /\
+        match state1.(st_first_valid_proposal), state2.(st_first_valid_proposal) with
+        | Some p1, Some p2 => p1.(p_block) = p2.(p_block)
+        | Some p1, None => False
+        | None, _ => True
+        end.
+
+
+(* for liveness, require extending events. *)
+Theorem liveness: 
+    forall n:Node, 
+    n<1+2*n_faulty ->
+    isHonest n = true ->
+    exists e:Event, e.(ev_node) = n /\ (let state:= state_after_event e in state.(st_committed)=true).
 
 
 End SyncHotStuff.
