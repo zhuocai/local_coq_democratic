@@ -912,7 +912,7 @@ Definition triggers_generation_def (e:Event): list TriggerType :=
                 end
             | _ => [] (* no generated trigger in other events *)
             end
-        | None => [] (*not quitted*)
+        | None =>  (*not quitted*)
             match e.(ev_trigger) with
             | Some trigger => 
                     match trigger with
