@@ -3,11 +3,14 @@ Require Import PeanoNat.
 Require Import Lia. 
 Require Import Coq.Arith.Arith. 
 Require Import Coq.Bool.Bool.
+Require Import Lia.
 Scheme Equality for list. 
 Import ListNotations.
 
 
 Section SyncHotStuff.
+
+(* ############### PART 1: Basic data types ##################*)
 
 Variable delta : nat. 
 
@@ -25,6 +28,9 @@ Record Certificate: Type := mkCertificate {
 
 Definition certificate_beq (c1 c2: Certificate): bool :=
     Nat.eqb c1.(c_block) c2.(c_block) && Nat.eqb c1.(c_round) c2.(c_round) && list_beq Node Nat.eqb c1.(c_voters) c2.(c_voters).
+
+
+
 
 Record ProposalType: Type := mkProposalType {
   p_block: BlockType;
@@ -128,22 +134,6 @@ Definition msg_beq (m1 m2:MsgType):bool :=
 
 Variable msg_receive_time: MsgType -> nat.
 
-Variable isHonest: Node -> bool. 
-
-Variable n_faulty: nat. 
-
-(* #total nodes = 2*n_faulty+1. Actual faulty nodes: <= n_faulty *)
-
-Definition replicas: list Node := List.seq 0 (2*n_faulty+1).
-
-Hypothesis honest_majority: 
-    length (filter isHonest replicas) >= 1+n_faulty.
-
-
-Definition leaderOfRound (r: nat): Node := (r mod (2*n_faulty+1)).
-
-(* First define events, then define states*)
-
 Inductive TimeoutType: Type := 
     | timeout_proposal 
     | timeout_precommit 
@@ -179,18 +169,11 @@ Record Event: Type := mkEvent {
 }.
 
 
-Variable event_happen_before: Event -> Event -> Prop.
-Variable direct_pred: Event -> option Event. (* the pred of the first event is None *) 
-Variable direct_next: Event -> option Event. (* the next of the last event is None | commit might not be the last event. | If any messages or timeout trigger afterwards, do it. *)
 
-Variable event_to_history: Event-> list Event. 
+(* note that two events might trigger the same event. for example, two different events can generate the same message sending.  
+However, if two events are exactly the same, the state transition can ignore the second event. 
 
-Hypothesis event_history_def:
-    forall e:Event, 
-    (direct_pred e = None -> event_to_history e = [e]) /\
-    (exists e_pred:Event, direct_pred e = Some e_pred -> event_to_history e = (e::(event_to_history e_pred))).
-
-(* note that two events might trigger the same event. for example, two different events can generate the same message sending. Therefore, the event_his_beq further requires that the history of the two events are exactly the same. *)
+*)
 Definition event_beq (e1 e2: Event): bool :=
     Nat.eqb e1.(ev_node) e2.(ev_node) && Nat.eqb e1.(ev_time) e2.(ev_time) && 
     match e1.(ev_trigger), e2.(ev_trigger) with
@@ -200,28 +183,30 @@ Definition event_beq (e1 e2: Event): bool :=
     | _, _ => false
     end.
 
-Definition event_his_beq (e1 e2:Event): bool:=
-    list_beq Event event_beq (event_to_history e1) (event_to_history e2).
+(* ============================ PART 1 END ==========================*)
 
-(* properties of events: 1. ordering *)
+(* ############################ PART 2 replicas, n, f ########################*)
 
-Hypothesis event_ordering_by_time: forall e1 e2:Event, 
-    e1.(ev_time) < e2.(ev_time) -> event_happen_before e1 e2.
-Hypothesis event_ordering_by_node: forall e1 e2:Event, 
-    e1.(ev_time) = e2.(ev_time) -> e1.(ev_node) < e2.(ev_node) -> event_happen_before e1 e2.
+Variable isHonest: Node -> bool. 
 
-Hypothesis event_ordering_msg_before_timeout: forall e1 e2: Event, 
-    e1.(ev_time) = e2.(ev_time) -> e1.(ev_node) = e2.(ev_node) -> exists msg, e1.(ev_trigger) = Some (trigger_msg_receive msg) -> exists timeout t_node t_round t_expire_time, e2.(ev_trigger) = Some (trigger_timeout timeout t_node t_round t_expire_time) -> event_happen_before e1 e2.
+Variable n_faulty: nat. 
 
-Hypothesis event_ordering_reflexive: forall e:Event, event_happen_before e e.
+(* #total nodes = 2*n_faulty+1. Actual faulty nodes: <= n_faulty *)
 
-Hypothesis event_ordering_decisive: forall e1 e2:Event, (e1 = e2) \/ ((event_happen_before e1 e2 -> not (event_happen_before e2 e1)) /\ (not (event_happen_before e1 e2) -> event_happen_before e2 e1)). 
+Definition replicas: list Node := List.seq 0 (2*n_faulty+1).
 
-Hypothesis event_ordering_transitive: forall e1 e2 e3:Event, 
-    event_happen_before e1 e2 -> event_happen_before e2 e3 -> event_happen_before e1 e3.
+Hypothesis honest_majority: 
+    length (filter isHonest replicas) >= 1+n_faulty.
 
-Hypothesis direct_pred_ordering: forall e1 e2:Event, 
-    direct_pred e1 = Some e2 -> e1.(ev_node) = e2.(ev_node) /\ event_happen_before e2 e1.
+
+Definition leaderOfRound (r: nat): Node := (r mod (2*n_faulty+1)).
+
+Hypothesis actual_cert_require_majority:
+    forall cert: Certificate, length cert.(c_voters) >= 1+n_faulty.
+
+(* =========================== PART 2 END ========================== *)
+
+(* ########################### PART 3 states and state transition ############*)
 
 Record StateType: Type := mkState {
     st_round: nat;
@@ -700,34 +685,138 @@ Definition state_transition (e: Event) (curr_state: StateType) : StateType :=
         end
     end.
 
-Variable init_state: StateType.
-
 Variable state_before_event: Event -> StateType. 
 Variable state_after_event: Event -> StateType. 
 
 (* Variable messages_after_event: Event -> option (list MsgType).
 Variable timeouts_after_event: Event -> option (list TimeoutType). *)
 
-Hypothesis init_state_def: 
-    init_state.(st_round) = 0 /\ 
-    init_state.(st_committed) = false /\ 
-    init_state.(st_locked_highest_cert) = None /\ 
-    init_state.(st_dynamic_highest_cert) = None /\ 
-    init_state.(st_all_certs) = (fun r b => []) /\ 
-    init_state.(st_round_start_time) = 0 /\ 
-    init_state.(st_first_valid_proposal) = None /\
-    init_state.(st_first_received_proposals) = None /\
-    init_state.(st_receive_valid_proposals_from) = [] /\
-    init_state.(st_quit_round_time) = None /\
-    init_state.(st_received_blames) = [] /\
-    init_state.(st_vote) = None /\
-    init_state.(st_precommit_time) = None /\
-    init_state.(st_received_precommits_from) = [].
+Definition init_state: StateType := mkState 0 false None None (fun r b => []) 0 None None [] None [] None None [] false.
+
+
+(* ======================= PART 3 END ================ *)
+
+(* ======================= PART 4 Events - Sequence Ordering ============= *)
+
+(* For proof, must make event history inductive. *)
+(* for proof of liveness, also need to make events inductive forward*)
+
+(* try: associate a number with a event. List of events*)
+(* and list of events towards the end. *)
+
+(* a trigger -> event -> state update && new triggers. All new triggers should be attributed to the event. *)
+
+
+
+(* the first event is the special event, which generates the first timeout && first proposal. *)
+
+Definition first_event (n:Node):Event:= 
+    mkEvent n None 0.
+
+(* Make events bi-directional inductive *)
+Variable event_to_seq_id: Event -> nat. (* for each node, this is a bijection*)
+(* Variable event_to_inv_seq_id: Event -> nat. *) 
+(* inv_seq_id assumes termination | not define for now*)
+
+Hypothesis event_id_bijection: (*a real hypothesis: events happen in some order. *)
+    forall e1 e2:Event, event_to_seq_id e1 = event_to_seq_id e2 -> e1.(ev_node) = e2.(ev_node) -> e1 = e2.
+
+Hypothesis event_id_init_first:
+    forall n:Node, event_to_seq_id (first_event n) = 1.
+
+Hypothesis event_id_none_zero:
+    forall e: Event, event_to_seq_id e >= 1.
+(* id 0 leave for None? *)
+
+(* this is already assuming the protocol will terminate | don't use it for now*)
+(* Hypothesis event_id_init_last:
+    forall e: Event, direct_next e = None -> event_to_inv_seq_id e = 0. *)
+
+Variable node_id_to_event: Node -> nat -> option Event. (* for each node, this is a bijection*)
+Hypothesis node_id_to_event_def:
+    forall n:Node, forall i:nat, forall e:Event,
+        node_id_to_event n i = Some e <-> (e.(ev_node) = n /\ event_to_seq_id e = i).
+
+Hypothesis node_id_to_even_def_id0:
+    forall n:Node, node_id_to_event n 0 = None.
+
+Hypothesis node_id_to_event_def_none:
+    forall n:Node, forall i:nat, i>=1 ->
+        node_id_to_event n i = None <-> forall e:Event, e.(ev_node) = n -> event_to_seq_id e < i. 
+
+
+
+Lemma event_node_id_of_event_eq:
+    forall e: Event, 
+        node_id_to_event e.(ev_node) (event_to_seq_id e) = Some e.
+    
+    intros.
+    remember (event_to_seq_id e) as i. 
+    remember (e.(ev_node)) as n.
+    rewrite node_id_to_event_def with (n:=n) (i:=i) (e:=e).
+    split.
+    auto.
+    auto.
+Qed.
+
+
+Definition direct_pred (e: Event): option Event:=
+    match event_to_seq_id e with
+    | 0 => None 
+    | S i => node_id_to_event e.(ev_node) i
+    end.
+
+Definition direct_next (e: Event): option Event:=
+    node_id_to_event e.(ev_node) (S (event_to_seq_id e)).
+    
+Lemma pred_is_injective:
+    forall e1 e2: Event, direct_pred e1 = direct_pred e2 -> 
+        ~direct_pred e1 = None -> e1 = e2. (* note that the special first events can point to the same None *)
+Admitted.
+
+Lemma pred_is_for_same_node:
+    forall e1 e2: Event, direct_pred e1 = Some e2 -> e1.(ev_node) = e2.(ev_node).
+Admitted.
+
+Lemma direct_next_is_injective:
+    forall e1 e2: Event, direct_next e1 = direct_next e2 -> ~direct_next e1 = None -> e1 = e2. (* the last events all point to None | have to prove there exist last event for every node ; *)
+Admitted.
+
+Lemma direct_next_is_for_same_node:
+    forall e1 e2: Event, direct_next e1 = Some e2 -> e1.(ev_node) = e2.(ev_node).
+
+Fixpoint node_id_to_ev_history (n:Node) (i:nat): list Event :=
+    match i with
+    | 0 => []
+    | S i' => 
+        match node_id_to_event n i with
+        | None => []
+        | Some e => e::(node_id_to_ev_history n i')
+        end
+    end.
+
+Definition event_to_history (e: Event) : list Event :=
+    node_id_to_ev_history e.(ev_node) (event_to_seq_id e). 
+
+(* properties of events: 1. time ordering *)
+
+Hypothesis event_ordering_by_time: 
+    forall e1 e2: Event, 
+        e1.(ev_node) = e2.(ev_node) -> e1.(ev_time) < e2.(ev_time) -> (event_to_seq_id e1) < (event_to_seq_id e2).
+
+(*if receive message in the last second, it is still valid. *)
+Hypothesis event_ordering_msg_before_timeout: forall e1 e2: Event, 
+    e1.(ev_node) = e2.(ev_node) -> e1.(ev_time) = e2.(ev_time) -> 
+    exists msg, e1.(ev_trigger) = Some (trigger_msg_receive msg) -> 
+    exists timeout t_node t_round t_expire_time, e2.(ev_trigger) = Some (trigger_timeout timeout t_node t_round t_expire_time) -> 
+    (event_to_seq_id e1) < (event_to_seq_id e2).
+    
+
 
 Hypothesis state_before_first_event:
-    forall e:Event, direct_pred e = None -> state_before_event e = init_state.
+    forall n:Node, state_before_event (first_event n) = init_state.
 
-Hypothesis state_recursive_def: 
+Hypothesis state_after_transition_def: 
     forall e:Event, 
     state_after_event e = state_transition e (state_before_event e).
 
@@ -735,21 +824,17 @@ Hypothesis state_direct_pred_def:
     forall e1 e2:Event, 
     direct_pred e2 = Some e1 -> state_after_event e1 = state_before_event e2.
 
+Lemma state_direct_next: (* can be proved with the above, but assumed for simplicity *)
+    forall e1 e2:Event, 
+    direct_next e1 = Some e2 -> state_after_event e1 = state_before_event e2.
+Admitted.
 
-(* a trigger -> event -> state update && new triggers. All new triggers should be attributed to the event. *)
 
-Variable generators_of_triggers: TriggerType -> Event. 
-Variable triggers_generated_by_event: Event -> list TriggerType. 
 
-(* the first event is the special event, which generates the first timeout && first proposal. *)
 
-Variable first_events: Node->Event. 
+(* =================== PART 4 END ===================== *)
 
-Variable first_event_def: 
-    forall n:Node,  n<1+2*n_faulty ->
-    let e := first_events n in
-    e.(ev_node) = n /\ e.(ev_time) = 0 /\ e.(ev_trigger) = None /\ direct_pred e = None.
-
+(* ################### PART 5 Trigger & its Generation by events ########*)
 (* every event has a trigger. except the special first_event *)
 
 Hypothesis honest_event_triggered_by_something: forall e:Event, 
@@ -769,6 +854,7 @@ Hypothesis honest_event_triggered_by_msg_at_receiver:
 Hypothesis honest_event_triggered_by_timeout_at_expire_time:
     forall e:Event, 
         isHonest e.(ev_node) = true -> (exists timeout t_node t_round t_expire_time, e.(ev_trigger) = Some (trigger_timeout t_node timeout t_round t_expire_time) -> e.(ev_time) = t_expire_time).
+
 Hypothesis honest_event_triggered_by_timeout_of_itself:
     forall e:Event, 
         isHonest e.(ev_node) = true -> (exists timeout t_node t_round t_expire_time, e.(ev_trigger) = Some (trigger_timeout timeout t_node t_round t_expire_time) -> (t_node = e.(ev_node))).
@@ -777,34 +863,6 @@ Hypothesis honest_event_triggered_by_timeout_of_itself:
 
 (* default first block is 1 *)
 
-
-
-
-Variable event_ancestor: Event -> Event. 
-
-(* the first event is the ancestor of all events. *)
-Hypothesis event_ancestor_def:
-    forall e:Event, (direct_pred e = None -> event_ancestor e = e) /\
-    (exists e_pred:Event, direct_pred e = Some e_pred -> ((event_ancestor e) = (event_ancestor e_pred))).
-
-(* every event has a unique ancestor. *)
-Hypothesis events_of_node_form_a_path:
-    forall e: Event, 
-        e.(ev_node) < 1+2*n_faulty ->
-        isHonest e.(ev_node) = true ->
-        event_his_beq (event_ancestor e) (first_events e.(ev_node)) = true.
-
-
-
-Hypothesis all_events_are_triggered_by_previous_events:
-    forall e2:Event,
-        isHonest e2.(ev_node) = true -> 
-        not (direct_pred e2 = None) -> (*e2 is not the special previous events*)
-        match e2.(ev_trigger) with
-        | None => False (* should not happen for honest nodes *)
-        | Some trigger => 
-            exists e1:Event, (e1 = generators_of_triggers trigger) /\ In trigger (triggers_generated_by_event e1)
-        end.
 
 (* A list of all triggers to consider.
 1. proposal-receiving timeout of the first round (handled by first_event)
@@ -822,9 +880,23 @@ Definition broadcast_msgs_to_trigger_list (sender:Node) (content:MsgContentType)
     map (fun msg => trigger_msg_receive msg) (broadcast_msgs sender content send_time).
 
 Definition triggers_generated_by_receiving_a_proposal_def (e:Event) (proposal:ProposalType) (prev_state:StateType) (new_state:StateType): list TriggerType :=
-    []
-
-.
+    let vote_triggers:= broadcast_msgs_to_trigger_list e.(ev_node) (msg_vote (mkVoteType proposal.(p_block) proposal.(p_round) e.(ev_node))) e.(ev_time) in
+    let forward_triggers:= broadcast_msgs_to_trigger_list e.(ev_node) (msg_propose proposal) e.(ev_time) in
+    match prev_state.(st_first_received_proposals) with 
+    | None =>
+        if is_proposal_valid_cert proposal prev_state then (*vote + forward*)
+            vote_triggers ++ forward_triggers
+        else if is_proposal_valid_round_proposer proposal prev_state then (*only forward*)
+            forward_triggers
+        else []
+    | Some first_proposal =>
+        if proposal_beq proposal first_proposal then (*receiving the same first proposal again*)
+            []
+        else (* receiving a different proposal | totally-invalid or cert-invalid or valid | total_invalid => ignore / otherwise => duplicate report quit *)
+            if is_proposal_valid_round_proposer proposal prev_state then (*broadcast quit conflict*)
+                broadcast_msgs_to_trigger_list e.(ev_node) (msg_quit (quit_conflict (mkQuitConflictType prev_state.(st_round) first_proposal proposal))) e.(ev_time)
+            else []
+    end.
 
 
 (* no worries about forwarding quit messages multiple times: once quit (recv f+1 blame or recv quit), forward it, then never handle the following*)
@@ -883,7 +955,7 @@ Definition triggers_generated_by_timout_def (e:Event) (timeout:TimeoutType) (nod
 (* the first event is the ancestor of all events. *)
     
 Definition triggers_of_first_event (n: Node) : list TriggerType :=
-    if  1<=?n then 
+    if  (1<=?n) && (n <=?2*n_faulty) then 
     [(trigger_timeout timeout_proposal n 0 (2*delta))]
     else [(trigger_timeout timeout_proposal n 0 (2*delta))] ++ (broadcast_msgs_to_trigger_list 0 (msg_propose (mkProposalType 1 0 None 0)) 0).
 
@@ -927,9 +999,109 @@ Definition triggers_generation_def (e:Event): list TriggerType :=
         end
     end.
 
-Hypothesis actual_cert_require_majority:
-    forall cert: Certificate, length cert.(c_voters) >= 1+n_faulty.
 
+
+(* event -> next triggers: defined as function *)
+(* event -> current trigger: e.(ev_trigger) *)
+(* event -> next events. Not defined *)
+(*  instead, trigger -> next_event is a variable. | one_trigger only generates one event *)
+(* trigger -> from_event: generated by from_event. *)
+
+(* maybe e1 e2 -> both generate trigger tri. *)
+
+(* trigger -> next_event, triggered by trigger | this acts as a hypothesis, saying that any trigger will generate an event *)
+Variable event_of_trigger: TriggerType -> Event.
+
+(* as a hypothesis, that every trigger is generated by some event. *)
+(* trigger -> from_event *)
+Variable generators_of_triggers: TriggerType -> Event. 
+
+(* event_ancestor is naturally defined as first_event of event_node *)
+
+(* ================= PART 5 END ================== *)
+
+(* ################# PART 6 Properties - prepare for proof ################ *)
+
+Fixpoint is_nonrepeat (nodes: list Node): bool:=
+    match nodes with
+    | [] => true
+    | n::nodes' => if is_element n nodes' then false else is_nonrepeat nodes'
+    end.
+
+Fixpoint is_subset_replicas (nodes: list Node):bool:=
+    match nodes with
+    | [] => true
+    | n::nodes' => if is_element n replicas then is_subset_replicas nodes' else false
+    end.
+
+Definition is_nonrepeat_subset_replicas (nodes: list Node):bool:=
+    is_nonrepeat nodes && is_subset_replicas nodes.
+
+(* a quorum is a nonrepeat subset of replicas *)
+
+Definition is_quorum (nodes: list Node):bool:=
+    is_nonrepeat_subset_replicas nodes && ((1+n_faulty) <=? length nodes).
+
+(* a quorum is a nonrepeat subset of replicas *)
+
+Lemma state_transition_remain_committed_once_committed:
+    forall e: Event, forall curr_state: StateType, 
+        curr_state.(st_committed) = true ->
+        state_transition e curr_state = curr_state.
+        intros.
+        unfold state_transition.
+        rewrite H.
+        trivial.
+Qed.
+
+Lemma once_committed_commit_in_next_state:
+    forall e e_next:Event, 
+    isHonest e.(ev_node) = true ->
+    (state_after_event e).(st_committed) = true ->
+    direct_next e = Some e_next -> 
+    (state_after_event e_next).(st_committed) = true.
+    
+    intros.
+    replace (state_after_event e_next) with (state_transition e_next (state_before_event e_next)).
+    2:rewrite state_after_transition_def. 2:auto.
+    replace (state_before_event e_next) with (state_after_event e).
+    2:rewrite state_direct_next with (e1:= e) (e2:=e_next). 3:trivial. 2:trivial.
+    replace (state_transition e_next (state_after_event e)) with (state_after_event e). trivial.
+    rewrite state_transition_remain_committed_once_committed. 
+    trivial. trivial.
+Qed.
+
+(* induction is required on the future events *)
+Lemma once_committed_remain_committed: 
+    forall e1:Event, forall id_gap:nat, 
+    isHonest e1.(ev_node) = true -> 
+    (state_after_event e1).(st_committed) = true ->
+    let e1_id := event_to_seq_id e1 in
+    let next_event := (node_id_to_event e1.(ev_node) (e1_id + id_gap)) in
+    match next_event with
+    | None => True
+    | Some e2 => 
+        (state_after_event e2).(st_committed) = true
+    end.
+
+    intros.
+    induction id_gap.
+    replace (e1_id + 0) with e1_id. 
+    2:lia.
+    
+    (* TODO pick up proof here | may need to change the above notion *)
+    replace (node_id_to_event e1.(ev_node) e1_id) with e1.
+    
+Qed.
+
+
+Lemma lemma_1_commit_implies_maj_precommits_in_same_round:
+    forall e1:Event, 
+        isHonest (e1.(ev_node)) = true ->
+        let state1 := state_after_event e1 in 
+        (state1.(st_committed) = true -> is_quorum state1.(st_received_precommits_from) = true).
+
+    .
 
 Theorem safety: 
     forall e1 e2: Event, 

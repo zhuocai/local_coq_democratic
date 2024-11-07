@@ -8,11 +8,21 @@ Import ListNotations.
 
 Section AMod.
 
-Theorem simple:
-    forall x:nat, forall y:nat, 
-        x+ y = x+y.
+(* how to build a unique chain *)
+Variable prev_nat: nat -> option nat. 
 
-        intros.
-        reflexivity.
+Hypothesis prev_0_is_none: prev_nat 0 = None.
+
+Hypothesis prev_is_injective:
+    forall a b, prev_nat a = prev_nat b -> a = b.
+
+Theorem prev_is_injective_alt:
+    forall a b, a <> b -> prev_nat a <> prev_nat b.
+    intros. 
+    intro.
+    apply prev_is_injective in H0.
+    contradiction.
+
+
 
 End AMod.
