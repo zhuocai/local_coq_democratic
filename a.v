@@ -8,21 +8,23 @@ Import ListNotations.
 
 Section AMod.
 
-(* how to build a unique chain *)
-Variable prev_nat: nat -> option nat. 
 
-Hypothesis prev_0_is_none: prev_nat 0 = None.
 
-Hypothesis prev_is_injective:
-    forall a b, prev_nat a = prev_nat b -> a = b.
+Inductive Opt: Set :=
+| fail : Opt
+| ok : bool -> Opt.
 
-Theorem prev_is_injective_alt:
-    forall a b, a <> b -> prev_nat a <> prev_nat b.
-    intros. 
-    intro.
-    apply prev_is_injective in H0.
-    contradiction.
 
+Theorem get: forall x: Opt, x<>fail -> bool.
+    refine (fun x:Opt => 
+    match x return x <> fail ->bool with
+    | fail => _ 
+    | ok b => fun _ =>b
+    end ).
+    intros; absurd(fail = fail).
+    
+
+Qed.
 
 
 End AMod.
