@@ -201,8 +201,9 @@ Hypothesis honest_majority:
 
 Definition leaderOfRound (r: nat): Node := (r mod (2*n_faulty+1)).
 
-Hypothesis actual_cert_require_majority:
-    forall cert: Certificate, length cert.(c_voters) >= 1+n_faulty.
+(* Should not define the following hypothesis. It is wrong. Assuming a false hypothesis can prove false (anything) *)
+(* Hypothesis actual_cert_require_majority:
+    forall cert: Certificate, length cert.(c_voters) >= 1+n_faulty. *)
 
 (* =========================== PART 2 END ========================== *)
 
@@ -737,6 +738,16 @@ Hypothesis node_id_to_event_def:
     forall n:Node, forall i:nat, forall e:Event,
         node_id_to_event n i = Some e <-> (e.(ev_node) = n /\ event_to_seq_id e = i).
 
+Lemma node_id_to_event_def_id: 
+    forall n:Node, forall i:nat, forall e:Event,
+        node_id_to_event n i = Some e -> event_to_seq_id e = i.
+    Admitted.
+
+Lemma node_id_to_event_def_node: 
+    forall n:Node, forall i:nat, forall e:Event,
+        node_id_to_event n i = Some e -> e.(ev_node) = n.
+    Admitted.
+
 Hypothesis node_id_to_even_def_id0:
     forall n:Node, node_id_to_event n 0 = None.
 
@@ -784,6 +795,29 @@ Admitted.
 
 Lemma direct_next_is_for_same_node:
     forall e1 e2: Event, direct_next e1 = Some e2 -> e1.(ev_node) = e2.(ev_node).
+Admitted.
+
+(* some relation between direct_pred/next and event_id*)
+
+Lemma next_id_is_direct_next_if_non_none:
+    forall e1 e2:Event,
+        node_id_to_event (ev_node e1) (S (event_to_seq_id e1)) = Some e2 ->
+           Some e2 = direct_next e1.
+        intros.
+        unfold direct_next.
+        auto.
+Qed.
+
+Lemma direct_next_of_none_id_is_none:
+    forall n:Node, forall i:nat, 
+        node_id_to_event n i = None -> node_id_to_event n (S i) = None.
+    Admitted.
+    
+
+Lemma option_event_cannot_be_done_and_event:
+    forall e: option Event, forall e':Event, e = Some e' -> e = None -> False.
+Admitted.
+    
 
 Fixpoint node_id_to_ev_history (n:Node) (i:nat): list Event :=
     match i with
@@ -1085,23 +1119,109 @@ Lemma once_committed_remain_committed:
     end.
 
     intros.
+
+    (* case next_event as [e2|].
+    2:trivial. *)
     induction id_gap.
     replace (e1_id + 0) with e1_id. 
     2:lia.
     
     (* TODO pick up proof here | may need to change the above notion *)
-    replace (node_id_to_event e1.(ev_node) e1_id) with e1.
-    
+    unfold next_event.
+    replace (e1_id+0) with e1_id. 2:lia.
+    replace (node_id_to_event e1.(ev_node) e1_id) with (Some e1). 
+    trivial.
+    replace e1_id with (event_to_seq_id e1).
+    rewrite event_node_id_of_event_eq with (e:=e1). trivial.
+    trivial.
+
+    destruct_with_eqn next_event.
+    2:trivial.
+
+    remember (node_id_to_event e1.(ev_node) (e1_id + id_gap)) as gap_event.
+    (* if gap_event is None, then next_event is also None. *)
+    (* if gap_event is not None, the next_event might be None or not. If next_event is None, ok. Otherwise Some next_event = direct_next *) 
+    destruct_with_eqn gap_event.
+    assert (e1_id+id_gap = event_to_seq_id e0).
+    rewrite node_id_to_event_def_id with (n:=e1.(ev_node)) (i:=e1_id+id_gap) (e:=e0). auto.
+    rewrite Heqgap_event. trivial.
+    assert (e0.(ev_node) = e1.(ev_node)).
+    rewrite node_id_to_event_def_node with (n:=e1.(ev_node)) (i:=e1_id+id_gap) (e:=e0). auto.
+    rewrite Heqgap_event. trivial.
+    assert (next_event=direct_next e0).
+    unfold next_event.
+    unfold direct_next.
+    rewrite H2.
+    replace (e1_id+ S id_gap) with (S (e1_id + id_gap)).
+    rewrite H1. auto.
+    lia.
+    apply once_committed_commit_in_next_state with (e:=e0) (e_next:=e).
+    rewrite H2.
+    trivial.
+    simpl in IHid_gap.
+    trivial.
+    replace (Some e) with next_event.
+    rewrite H3.
+    trivial.
+    (* conflict. *)
+    assert (next_event=None).
+    unfold next_event.
+    replace (e1_id+ S id_gap) with (S (e1_id + id_gap)).
+    rewrite direct_next_of_none_id_is_none with (n:=e1.(ev_node)) (i:=e1_id+id_gap). trivial.
+    rewrite Heqgap_event in Heqo0.
+    auto.
+    lia.
+    assert False.
+    apply option_event_cannot_be_done_and_event with (e:=next_event) (e':=e).
+    auto. auto. auto. 
 Qed.
 
+Lemma not_committed_implies_not_enough_precommits:
+    forall state:StateType,
+        state.(st_committed) = false -> is_quorum state.(st_received_precommits_from) = false.
+Admitted.
 
-Lemma lemma_1_commit_implies_maj_precommits_in_same_round:
-    forall e1:Event, 
-        isHonest (e1.(ev_node)) = true ->
-        let state1 := state_after_event e1 in 
-        (state1.(st_committed) = true -> is_quorum state1.(st_received_precommits_from) = true).
+Lemma is_committed_if_enough_precommits:
+    forall state:StateType,
+        is_quorum state.(st_received_precommits_from) = true -> state.(st_committed) = true.
+Admitted.
 
-    .
+
+Theorem lemma_61_part1:
+    forall e: Event, forall block: blockType,
+    isHonest e.(ev_node) = true ->
+    (state_before_event e).(st_committed) = false ->
+    (state_after_event e).(st_committed) = true ->
+    let commit_proposal:= (state_after_event e).(st_first_valid_proposal) in
+    let round := (state_after_event e).(st_round) in
+    (forall e2: Event,
+        let state2after:= state_after_event e2 in 
+        state2after.(st_round) = round -> 
+        is_quorum (state2after.(st_all_certs) round block) = true -> (* if there is a certified block in the same round, must be the committed one*)
+        block = commit_proposal.(p_block)).
+
+    intros.
+
+Theorem lemma_61_part2:
+    forall e: Event, 
+    isHonest e.(ev_node) = true ->
+    (state_before_event e).(st_committed) = false ->
+    (state_after_event e).(st_committed) = true ->
+    let commit_proposal:= (state_after_event e).(st_first_valid_proposal) in
+    let round := (state_after_event e).(st_round) in
+    (forall e2: Event,
+        let state2before:= state_before_event e2 in
+        let state2after:= state_after_event e2 in
+        isHonest e2.(ev_node) = true -> 
+        state2before.(st_round) = round ->
+        state2after.(st_round) = (round+1) -> 
+        exists cert:CertType, 
+        state2after.(st_locked_highest_cert) = Some cert /\
+        cert.(c_block) = commit_proposal.(p_block)).
+
+Admitted.
+
+
 
 Theorem safety: 
     forall e1 e2: Event, 
