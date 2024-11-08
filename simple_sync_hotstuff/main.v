@@ -209,7 +209,9 @@ Definition leaderOfRound (r: nat): Node := (r mod (2*n_faulty+1)).
 
 (* ########################### PART 3 states and state transition ############*)
 
+(* edit add a node *)
 Record StateType: Type := mkState {
+    st_node: Node;
     st_round: nat;
     st_committed: bool;
     st_locked_highest_cert: option Certificate; (* the highest block is included in the highest cert*)
@@ -233,7 +235,9 @@ Record StateType: Type := mkState {
 (* use the following interfaces to modify some fields of the state *)
 
 Definition state_set_first_received_proposal (curr_state:StateType) (proposal:ProposalType): StateType:=
-    mkState curr_state.(st_round) 
+    mkState 
+    curr_state.(st_node)
+    curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert)
     curr_state.(st_dynamic_highest_cert)
@@ -250,7 +254,9 @@ Definition state_set_first_received_proposal (curr_state:StateType) (proposal:Pr
     curr_state.(st_new_view_timeouted).
 
 Definition state_set_first_valid_proposal (curr_state:StateType) (proposal:ProposalType) (msg_sender: Node) (node:Node): StateType :=
-    mkState curr_state.(st_round) 
+    mkState 
+    curr_state.(st_node)
+    curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert)
     curr_state.(st_dynamic_highest_cert)
@@ -275,7 +281,8 @@ Definition state_set_first_valid_proposal (curr_state:StateType) (proposal:Propo
 Definition state_set_more_proposals (curr_state:StateType) (proposal: ProposalType)  (msg_sender: Node): StateType:=
     if is_element msg_sender curr_state.(st_receive_valid_proposals_from) then curr_state
     else 
-        mkState curr_state.(st_round) 
+        mkState curr_state.(st_node)
+        curr_state.(st_round) 
         curr_state.(st_committed) 
         curr_state.(st_locked_highest_cert)
         curr_state.(st_dynamic_highest_cert)
@@ -298,7 +305,8 @@ Definition blames_to_blamers: list BlameType -> list Node :=
 Definition state_set_receive_blame (curr_state:StateType) (blame:BlameType) : StateType :=
     if is_element blame.(b_blamer) (blames_to_blamers curr_state.(st_received_blames)) then curr_state
     else 
-        mkState curr_state.(st_round) 
+        mkState curr_state.(st_node)
+    curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert)
     curr_state.(st_dynamic_highest_cert)
@@ -315,7 +323,8 @@ Definition state_set_receive_blame (curr_state:StateType) (blame:BlameType) : St
     curr_state.(st_new_view_timeouted).
 
 Definition state_set_receive_qt (curr_state:StateType) (qt:QuitType) (time: nat): StateType :=
-    mkState curr_state.(st_round) 
+    mkState curr_state.(st_node)
+    curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert)
     curr_state.(st_dynamic_highest_cert)
@@ -332,7 +341,8 @@ Definition state_set_receive_qt (curr_state:StateType) (qt:QuitType) (time: nat)
     curr_state.(st_new_view_timeouted).
 
 Definition state_set_quit_blame (curr_state:StateType) (time: nat): StateType :=
-    mkState curr_state.(st_round) 
+    mkState curr_state.(st_node)
+    curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert)
     curr_state.(st_dynamic_highest_cert)
@@ -349,7 +359,8 @@ Definition state_set_quit_blame (curr_state:StateType) (time: nat): StateType :=
     curr_state.(st_new_view_timeouted).
 
 Definition state_set_quit_conflict (curr_state:StateType) (time: nat): StateType :=
-    mkState curr_state.(st_round) 
+    mkState curr_state.(st_node)
+    curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert)
     curr_state.(st_dynamic_highest_cert)
@@ -366,7 +377,8 @@ Definition state_set_quit_conflict (curr_state:StateType) (time: nat): StateType
     curr_state.(st_new_view_timeouted).
 
 Definition state_set_precommit_start (curr_state:StateType) (time:nat):StateType:=
-    mkState curr_state.(st_round) 
+    mkState curr_state.(st_node)
+    curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert)
     curr_state.(st_dynamic_highest_cert)
@@ -405,6 +417,7 @@ Definition update_highest_cert (highest_cert: option Certificate) (all_certs: na
 (* TODO fix bug: fix highest_cert during slot, updating during the quit_round break.   *)
 Definition state_set_receive_vote (curr_state:StateType) (vote:VoteType):StateType:=
     mkState 
+    curr_state.(st_node)
     curr_state.(st_round) 
     curr_state.(st_committed) 
     curr_state.(st_locked_highest_cert) 
@@ -425,7 +438,7 @@ Definition state_set_receive_vote (curr_state:StateType) (vote:VoteType):StateTy
 
 (* also set the locked highest cert *)
 Definition state_set_enter_new_round (curr_state:StateType) (time: nat): StateType :=
-    mkState (curr_state.(st_round)+1) false 
+    mkState (curr_state).(st_node) (curr_state.(st_round)+1) false 
     curr_state.(st_dynamic_highest_cert) (*set locked highest cert*) 
     curr_state.(st_dynamic_highest_cert)
     curr_state.(st_all_certs) 
@@ -439,6 +452,7 @@ Definition state_set_receive_precommit (curr_state:StateType) (precommit: Precom
     if is_element precommit.(pc_voter) curr_state.(st_received_precommits_from) then curr_state
     else 
         mkState
+        curr_state.(st_node)
         curr_state.(st_round) 
         curr_state.(st_committed) 
         curr_state.(st_locked_highest_cert) 
@@ -462,6 +476,7 @@ Definition state_set_receive_precommit (curr_state:StateType) (precommit: Precom
 (* once committed, the state of the node will not change any more. The committed proposal is exactly curr_state.(st_current_proposal)*)
 Definition state_set_commit (curr_state:StateType) (time:nat) : StateType :=
     mkState
+        curr_state.(st_node)
         curr_state.(st_round) 
         (* curr_state.(st_committed)  *)
         true
@@ -481,6 +496,7 @@ Definition state_set_commit (curr_state:StateType) (time:nat) : StateType :=
 
 Definition state_set_dynamic_highest_cert (curr_state:StateType) (cert:Certificate): StateType :=
     mkState
+        curr_state.(st_node)
         curr_state.(st_round) 
         curr_state.(st_committed)
         curr_state.(st_locked_highest_cert) 
@@ -507,6 +523,7 @@ Definition state_set_recv_cert (curr_state:StateType) (cert:Certificate): StateT
 
 Definition state_set_new_view_timeout (curr_state:StateType): StateType:=
     mkState
+        curr_state.(st_node)
         curr_state.(st_round) 
         curr_state.(st_committed)
         curr_state.(st_locked_highest_cert)
@@ -603,7 +620,8 @@ Definition is_proposal_valid_cert (proposal: ProposalType) (curr_state: StateTyp
     
 
 Definition state_transition (e: Event) (curr_state: StateType) : StateType := 
-    if curr_state.(st_committed) then curr_state 
+    if negb (curr_state.(st_node) =? e.(ev_node)) then curr_state
+    else if curr_state.(st_committed) then curr_state 
     else match curr_state.(st_quit_round_time) with 
     | Some quit_time =>  (* receiving votes | waiting for delta timeout to enter next round*)
         match e.(ev_trigger) with
@@ -689,10 +707,13 @@ Definition state_transition (e: Event) (curr_state: StateType) : StateType :=
 Variable state_before_event: Event -> StateType. 
 Variable state_after_event: Event -> StateType. 
 
+Variable state_after_node_id: Node->nat->StateType. 
+Variable state_before_node_id: Node->nat->StateType.
+
 (* Variable messages_after_event: Event -> option (list MsgType).
 Variable timeouts_after_event: Event -> option (list TimeoutType). *)
 
-Definition init_state: StateType := mkState 0 false None None (fun r b => []) 0 None None [] None [] None None [] false.
+Definition init_state (n:Node): StateType := mkState n 0 false None None (fun r b => []) 0 None None [] None [] None None [] false.
 
 
 (* ======================= PART 3 END ================ *)
@@ -713,6 +734,22 @@ Definition init_state: StateType := mkState 0 false None None (fun r b => []) 0 
 
 Definition first_event (n:Node):Event:= 
     mkEvent n None 0.
+
+
+
+Lemma option_event_not_one_is_some_event:
+    forall e: option Event, ~e=None -> exists se, e = Some se. 
+    intros.
+    destruct_with_eqn e. 
+    exists e0.
+    trivial.
+    contradiction.
+Qed.
+
+Lemma option_event_cannot_be_done_and_event:
+    forall e: option Event, forall e':Event, e = Some e' -> e = None -> False.
+    intros.
+Admitted.
 
 (* Make events bi-directional inductive *)
 Variable event_to_seq_id: Event -> nat. (* for each node, this is a bijection*)
@@ -753,9 +790,32 @@ Hypothesis node_id_to_even_def_id0:
 
 Hypothesis node_id_to_event_def_none:
     forall n:Node, forall i:nat, i>=1 ->
-        node_id_to_event n i = None <-> forall e:Event, e.(ev_node) = n -> event_to_seq_id e < i. 
+        node_id_to_event n i = None <-> forall e:Event, e.(ev_node) = n -> (event_to_seq_id e < i). 
 
 
+Lemma nonempty_event_at_i1_implies_non_empty_event_at_i:
+    forall n:Node, forall i: nat, forall se: Event,
+        i>=1 ->
+        Some se = node_id_to_event n (S i) ->
+        exists se', Some se' = node_id_to_event n i. 
+    intros.
+    remember (node_id_to_event n i) as event_i. 
+    destruct_with_eqn event_i.
+    exists e. trivial.
+    assert (node_id_to_event n i = None).
+    rewrite Heqevent_i. trivial.
+    rewrite node_id_to_event_def_none with (n:=n)(i:=i) in H1.
+    assert (se.(ev_node) = n).
+    apply node_id_to_event_def_node with (i:=(S i)).
+    auto.
+    apply H1 in H2.
+    assert (event_to_seq_id se = (S i)).
+    apply node_id_to_event_def_id with (n:=n)(i:=(S i)).
+    auto.
+    rewrite H3 in H2.
+    lia.
+    auto.
+Qed.
 
 Lemma event_node_id_of_event_eq:
     forall e: Event, 
@@ -814,9 +874,7 @@ Lemma direct_next_of_none_id_is_none:
     Admitted.
     
 
-Lemma option_event_cannot_be_done_and_event:
-    forall e: option Event, forall e':Event, e = Some e' -> e = None -> False.
-Admitted.
+
     
 
 Fixpoint node_id_to_ev_history (n:Node) (i:nat): list Event :=
@@ -848,7 +906,7 @@ Hypothesis event_ordering_msg_before_timeout: forall e1 e2: Event,
 
 
 Hypothesis state_before_first_event:
-    forall n:Node, state_before_event (first_event n) = init_state.
+    forall n:Node, state_before_event (first_event n) = init_state n.
 
 Hypothesis state_after_transition_def: 
     forall e:Event, 
@@ -863,8 +921,15 @@ Lemma state_direct_next: (* can be proved with the above, but assumed for simpli
     direct_next e1 = Some e2 -> state_after_event e1 = state_before_event e2.
 Admitted.
 
+Hypothesis state_after_node_id_def:
+    forall n:Node, forall i:nat, forall e: Event,
+        node_id_to_event n i = Some e ->
+        state_after_node_id n i = state_after_event e.
 
-
+Hypothesis state_before_node_id_def:
+    forall n:Node, forall i:nat, forall e: Event,
+        node_id_to_event n i = Some e ->
+        state_before_node_id n i = state_before_event e.
 
 (* =================== PART 4 END ===================== *)
 
@@ -1079,12 +1144,18 @@ Definition is_quorum (nodes: list Node):bool:=
 (* a quorum is a nonrepeat subset of replicas *)
 
 Lemma state_transition_remain_committed_once_committed:
-    forall e: Event, forall curr_state: StateType, 
+    forall e: Event, forall curr_state: StateType,
         curr_state.(st_committed) = true ->
         state_transition e curr_state = curr_state.
         intros.
         unfold state_transition.
+        case_eq (curr_state.(st_node) =? e.(ev_node)).
+        simpl.
+        intros. 
         rewrite H.
+        trivial.
+        intro.
+        simpl.
         trivial.
 Qed.
 
@@ -1177,18 +1248,56 @@ Lemma once_committed_remain_committed:
 Qed.
 
 Lemma not_committed_implies_not_enough_precommits:
-    forall state:StateType,
-        state.(st_committed) = false -> is_quorum state.(st_received_precommits_from) = false.
-Admitted.
+    forall n: Node, forall i: nat, forall e:Event,
+        Some e = node_id_to_event n i ->
+        let state := state_after_node_id n i in
+        state.(st_committed) = false -> 
+        is_quorum state.(st_received_precommits_from) = false.
+        intros.
+        unfold state.
+        unfold state in H0. 
+        induction i.
+        assert (node_id_to_event n 0 = None). 
+        apply node_id_to_even_def_id0.
+        assert False.
+        apply option_event_cannot_be_done_and_event with (e:= (node_id_to_event n 0)) (e':=e).
+        auto.
+        auto.
+        contradiction.
+        remember (node_id_to_event n i) as last_event.
+        destruct_with_eqn last_event.
+        remember e as next_e.
+
+        
+        
+
+
+
+
+
+Qed.
 
 Lemma is_committed_if_enough_precommits:
-    forall state:StateType,
-        is_quorum state.(st_received_precommits_from) = true -> state.(st_committed) = true.
+    forall n: Node, forall i: nat, forall e:Event,
+        Some e = node_id_to_event n i ->
+        let state := state_after_event e in
+        state.(st_committed) = true -> 
+        is_quorum state.(st_received_precommits_from) = true.
+
+        
 Admitted.
 
 
+Lemma if_committed_exists_block: 
+    forall e: Event, 
+    isHonest e.(ev_node) = true ->
+    (state_after_event e).(st_committed) = true ->
+    exists proposal, (state_after_event e).(st_first_valid_proposal) = Some proposal.
+
+Admitted. 
+
 Theorem lemma_61_part1:
-    forall e: Event, forall block: blockType,
+    forall e: Event, forall block: BlockType,
     isHonest e.(ev_node) = true ->
     (state_before_event e).(st_committed) = false ->
     (state_after_event e).(st_committed) = true ->
@@ -1198,9 +1307,13 @@ Theorem lemma_61_part1:
         let state2after:= state_after_event e2 in 
         state2after.(st_round) = round -> 
         is_quorum (state2after.(st_all_certs) round block) = true -> (* if there is a certified block in the same round, must be the committed one*)
-        block = commit_proposal.(p_block)).
+        (match commit_proposal with 
+        | None => False
+        | Some proposal => block = proposal.(p_block)
+        end 
+        )).
 
-    intros.
+    Admitted. 
 
 Theorem lemma_61_part2:
     forall e: Event, 
@@ -1215,9 +1328,13 @@ Theorem lemma_61_part2:
         isHonest e2.(ev_node) = true -> 
         state2before.(st_round) = round ->
         state2after.(st_round) = (round+1) -> 
-        exists cert:CertType, 
+        exists cert:Certificate, 
         state2after.(st_locked_highest_cert) = Some cert /\
-        cert.(c_block) = commit_proposal.(p_block)).
+        (match commit_proposal with 
+        | None => False
+        | Some proposal => cert.(c_block) = proposal.(p_block)
+        end 
+        )).
 
 Admitted.
 
