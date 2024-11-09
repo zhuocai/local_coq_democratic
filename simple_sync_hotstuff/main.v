@@ -4,6 +4,7 @@ Require Import Lia.
 Require Import Coq.Arith.Arith. 
 Require Import Coq.Bool.Bool.
 Require Import Lia.
+Require Import Coq.Program.Equality.
 Scheme Equality for list. 
 Import ListNotations.
 
@@ -704,16 +705,19 @@ Definition state_transition (e: Event) (curr_state: StateType) : StateType :=
         end
     end.
 
+Definition state_transition_op (event: option Event) (state:StateType): StateType:=
+    match event with
+    | None => state
+    | Some e => state_transition e state
+    end. 
+
 Variable state_before_event: Event -> StateType. 
 Variable state_after_event: Event -> StateType. 
 
-Variable state_after_node_id: Node->nat->StateType. 
-Variable state_before_node_id: Node->nat->StateType.
-
-(* Variable messages_after_event: Event -> option (list MsgType).
-Variable timeouts_after_event: Event -> option (list TimeoutType). *)
-
 Definition init_state (n:Node): StateType := mkState n 0 false None None (fun r b => []) 0 None None [] None [] None None [] false.
+
+
+
 
 
 (* ======================= PART 3 END ================ *)
@@ -750,6 +754,7 @@ Lemma option_event_cannot_be_done_and_event:
     forall e: option Event, forall e':Event, e = Some e' -> e = None -> False.
     intros.
 Admitted.
+
 
 (* Make events bi-directional inductive *)
 Variable event_to_seq_id: Event -> nat. (* for each node, this is a bijection*)
@@ -791,6 +796,27 @@ Hypothesis node_id_to_even_def_id0:
 Hypothesis node_id_to_event_def_none:
     forall n:Node, forall i:nat, i>=1 ->
         node_id_to_event n i = None <-> forall e:Event, e.(ev_node) = n -> (event_to_seq_id e < i). 
+
+Fixpoint state_after_node_id (n:Node) (i:nat):StateType:=
+    match i with 
+    | 0 => init_state n
+    | (S i') => state_transition_op (node_id_to_event n (i)) (state_after_node_id n (i'))
+    end.
+
+Definition state_before_node_id (n:Node) (i:nat):StateType:=
+    match i with 
+    | 0 => init_state n
+    | S i' => state_after_node_id n i'
+    end.
+
+(* Lemma state_after_node_id_0_is_init: Wrong lemma
+    forall n:Node, state_after_node_id n 1 = init_state n.
+    intros.
+    unfold state_after_node_id.
+    rewrite node_id_to_even_def_id0.
+    simpl.
+    trivial.
+Qed. *)
 
 
 Lemma nonempty_event_at_i1_implies_non_empty_event_at_i:
@@ -921,15 +947,113 @@ Lemma state_direct_next: (* can be proved with the above, but assumed for simpli
     direct_next e1 = Some e2 -> state_after_event e1 = state_before_event e2.
 Admitted.
 
-Hypothesis state_after_node_id_def:
+Lemma id_none_before_event_implies_id0:
+    forall n:Node, forall i:nat, 
+        node_id_to_event n i = None -> 
+        ~node_id_to_event n (S i) = None -> i=0.
+    intros.
+    destruct i.
+    auto.
+    remember (S i) as i1.
+    assert (i1>=1).
+    lia.
+    simpl in H0.
+    assert (forall e:Event, e.(ev_node) = n -> (event_to_seq_id e < i1)).
+    apply node_id_to_event_def_none with (i:=i1).
+    auto.
+    auto.
+    assert (exists e1, node_id_to_event n (S i1) = Some e1).
+    apply option_event_not_one_is_some_event. auto.
+    destruct_with_eqn (node_id_to_event n (S i1)).
+    assert (event_to_seq_id e = S i1).
+    apply node_id_to_event_def_id with (n:=n)(i:=S i1). auto.
+    assert (e.(ev_node) = n).
+    apply node_id_to_event_def_node with (i:=S i1). auto.
+    specialize H2 with e.
+    apply H2 in H5.
+    lia.
+    contradiction.
+Qed.
+
+Lemma state_after_equiv:
     forall n:Node, forall i:nat, forall e: Event,
         node_id_to_event n i = Some e ->
         state_after_node_id n i = state_after_event e.
+        intros.
+        dependent induction i. (* event_i = Some e. In induction hypothesis, want event_i = Some e', not Some e *)
+        - rewrite node_id_to_even_def_id0 in H. apply  option_event_cannot_be_done_and_event in H. contradiction. auto. 
+        - destruct_with_eqn (node_id_to_event n i).
+                assert (state_after_node_id n i = state_after_event e0).
+                apply IHi with (e:=e0). auto.
+                destruct_with_eqn i. (* i should >=1*)
+                rewrite node_id_to_even_def_id0 in Heqo. 
+                    discriminate.
+                rewrite state_after_transition_def with (e:=e).
+                rewrite <- state_direct_pred_def with (e1:=e0) (e2:=e).
+                rewrite <- H0.
+                remember (S n0) as n1.
+                remember (state_after_node_id n n1) as state_n1.
+                simpl.
+                rewrite -> H.
+                unfold state_transition_op.
+                rewrite <- Heqstate_n1. 
+                trivial.
 
-Hypothesis state_before_node_id_def:
+                unfold direct_pred.
+                replace (event_to_seq_id e) with (S (S n0)).
+                assert (ev_node e = n).
+                apply node_id_to_event_def_node with (i:=(S( S(n0)))). auto.
+                rewrite -> H1.
+                auto.
+                rewrite -> node_id_to_event_def_id with (n:=n)(i:=S(S n0)). auto.
+                auto.
+                assert (i=0).
+                apply id_none_before_event_implies_id0 with (n:=n). auto. 
+                rewrite -> H.
+                discriminate.
+                rewrite H0.
+                unfold state_after_node_id.
+                rewrite H0 in H.
+                rewrite -> H.
+                unfold state_transition_op.
+                rewrite state_after_transition_def.
+                assert (state_before_event e = init_state n).
+                assert ( e = first_event n).
+                apply event_id_bijection with (e1:=e) (e2:=first_event n). 
+                rewrite -> event_id_init_first.
+                apply node_id_to_event_def_id with (n:=n)(i:=1). auto.
+                unfold first_event.
+                simpl.
+                apply node_id_to_event_def_node with (i:=1). auto.
+                rewrite -> H1.
+                apply state_before_first_event.
+                rewrite -> H1.
+                auto.
+Qed.
+
+Lemma state_before_equiv:
     forall n:Node, forall i:nat, forall e: Event,
         node_id_to_event n i = Some e ->
         state_before_node_id n i = state_before_event e.
+
+
+Lemma state_node_id_transition:
+    forall n:Node, forall i:nat, 
+        state_after_node_id n i = state_transition_op (node_id_to_event n i) (state_before_node_id n i).
+    intros.
+    remember (node_id_to_event n i) as e.
+    destruct_with_eqn e.
+    
+    rewrite state_after_node_id_def with (e:=e0) (n:=n)(i:=i).
+    rewrite state_before_node_id_def with (e:=e0) (n:=n)(i:=i).
+    unfold state_transition_op.
+    rewrite state_after_transition_def.
+    trivial.
+    auto.
+    auto.
+    simpl.
+    trivial.
+Qed.
 
 (* =================== PART 4 END ===================== *)
 
@@ -1247,9 +1371,24 @@ Lemma once_committed_remain_committed:
     auto. auto. auto. 
 Qed.
 
+
+(* lemma to prove: 
+    forall n, i, if the state is non-committed, then precommits is not a quorum. 
+    induction step: 
+    i = 0 ok. 
+    if at i, non-committed -> not quorum. => at i+1, remain non-committed -> not quorum. otherwise has committed. 
+
+    corner case, event_i is None => i = 0. then event_{i+1} is init state. 
+    event_{i+1} is None => not interested. 
+    so, the main case is when event_i is not None, event_{i+1} is not None. 
+    know that state_{i+1} says non-committed. 
+    First rule out the case that state_{i} is committed. For otherwise, state_{i+1} is committed. 
+*)
+
+
 Lemma not_committed_implies_not_enough_precommits:
-    forall n: Node, forall i: nat, forall e:Event,
-        Some e = node_id_to_event n i ->
+    forall n: Node, forall i: nat,
+        ~node_id_to_event n i = None ->
         let state := state_after_node_id n i in
         state.(st_committed) = false -> 
         is_quorum state.(st_received_precommits_from) = false.
@@ -1260,13 +1399,21 @@ Lemma not_committed_implies_not_enough_precommits:
         assert (node_id_to_event n 0 = None). 
         apply node_id_to_even_def_id0.
         assert False.
-        apply option_event_cannot_be_done_and_event with (e:= (node_id_to_event n 0)) (e':=e).
-        auto.
-        auto.
         contradiction.
+        contradiction.
+
+        remember (state_before_node_id n (S i)) as state_i.
+        remember (state_after_node_id n (S i)) as state_i_1.
+        remember (node_id_to_event n i) as last_event.
+        remember (node_id_to_event n (S i)) as next_event.
+        assert (state_i_1 = state_transition_op next_event state_i).
+
+        (* know that the event_{i+1} is non-empty && the after state ^^ *)
+        (* event_{i} is None <-> then i = 0 *)
         remember (node_id_to_event n i) as last_event.
         destruct_with_eqn last_event.
-        remember e as next_e.
+        (* the first case, last_event = Some e *)
+        
 
         
         
