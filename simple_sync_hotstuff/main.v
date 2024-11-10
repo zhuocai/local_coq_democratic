@@ -20,6 +20,21 @@ Section SyncHotStuff.
 
 (* Use Nat.eqb_eq*)
 
+Lemma nat_eqb_eq_single:
+    forall x y : nat, Nat.eqb x y = true -> x = y.
+    intros.
+    apply Nat.eqb_eq. auto.
+Qed.
+
+Lemma nat_eqb_eq_single_reverse:
+    forall x y : nat, x = y -> Nat.eqb x y = true.
+    intros.
+    apply Nat.eqb_eq. auto.
+Qed.
+(* Lemma list_eq_or_neq: forall A:Set, forall a b: list A, a=b \/~a=b.
+    intros. destruct (list_eq_dec A a b). left. apply e. right. apply n.
+Qed. *)
+
 Variable delta : nat. 
 
 Hypothesis delta_is_positive: delta >= 1.
@@ -1933,6 +1948,324 @@ Lemma st_change_dynamic_highest_cert_only_if_recv_vote_or_proposal_or_cert:
 
 Qed.
 
+(* round start time seems not important *)
+
+Ltac contradiction_4 H:=(destruct H; contradiction; destruct H; contradiction; destruct H; contradiction; contradiction).
+
+Lemma st_change_proposal_related_only_if_recv_proposal_or_vote_or_timeout_status:
+    forall n:Node, forall i:nat, forall e:Event, 
+    let prev_state:= state_after_node_id n i in
+    let new_state:=state_after_node_id n (S i) in
+    ((new_state.(st_first_received_proposal) <> prev_state.(st_first_received_proposal)) \/ 
+    (new_state.(st_first_valid_proposal) <> prev_state.(st_first_valid_proposal)) \/ 
+    (new_state.(st_received_valid_proposal_from) <> prev_state.(st_received_valid_proposal_from)) \/ 
+    (new_state.(st_vote) <> prev_state.(st_vote))) -> 
+    node_id_to_event n (S i) = Some e ->
+    (exists t_node t_round t_expire_time, 
+        ev_trigger e = Some (trigger_timeout timeout_quit_status t_node t_round t_expire_time) /\
+        t_round = prev_state.(st_round) /\
+        t_expire_time = e.(ev_time)) \/
+    (exists msg, 
+        ev_trigger e = Some (trigger_msg_receive msg) /\
+        ((exists vote, msg.(msg_content) = msg_vote vote) \/
+        (exists proposal, msg.(msg_content) = msg_propose proposal))).
+    intros.
+    unfold new_state in H.
+    assert (state_after_node_id n (S i) = state_transition e (state_after_node_id n i)). 
+    remember (state_after_node_id n i) as state1.
+    rewrite state_after_node_id_one_level.
+    rewrite H0.
+    simpl.
+    rewrite Heqstate1. auto.
+    rewrite H1 in H.
+    replace (state_after_node_id n i) with prev_state in H.
+    2:auto.
+    unfold state_transition in H.
+    destruct_with_eqn (negb (st_node prev_state =? ev_node e)).
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct_with_eqn (st_committed prev_state). destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct_with_eqn (st_quit_round_time prev_state). 
+    unfold state_transition_1_quit_round in H. 
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (msg_content msg).
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    right. exists msg. split. auto. left. exists vote. auto.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    assert (st_first_received_proposal (state_transition_2_msg_D_highest_cert e prev_state msg cert) = prev_state.(st_first_received_proposal)).
+    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. clear H2.
+    assert (st_first_valid_proposal (state_transition_2_msg_D_highest_cert e prev_state msg cert) = prev_state.(st_first_valid_proposal)).
+    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. clear H2.
+    assert (st_received_valid_proposal_from (state_transition_2_msg_D_highest_cert e prev_state msg cert) = prev_state.(st_received_valid_proposal_from)).
+    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. clear H2.
+    assert (st_vote (state_transition_2_msg_D_highest_cert e prev_state msg cert) = prev_state.(st_vote)).
+    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. clear H2.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct_with_eqn timeout.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct_with_eqn (round =? st_round prev_state).
+    unfold state_set_enter_new_round in H. simpl in H. 
+    left. exists node, round, (e.(ev_time)). split. 
+    assert (e.(ev_time) = expire_time).
+    apply event_triggered_by_timeout_at_expire_time with (n:=n) (i:=(S i)) (e:=e) (timeout:=timeout_quit_status) (t_node:=node) (t_round:=round) (t_expire_time:=expire_time). auto. auto. rewrite H2.
+    auto. split. 
+    apply Nat.eqb_eq. auto. auto.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (n_replicas<=?msg_sender msg).
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    unfold state_transition_2_trigger_msg in H.
+    destruct_with_eqn (msg_content msg).
+    right. exists msg. split. auto. right. exists proposal. auto. 
+    right. exists msg. split. auto. left. exists vote. auto. 
+    assert (st_first_received_proposal (state_transition_2_msg_C_precommit e prev_state msg precommit) = st_first_received_proposal prev_state).
+    apply st_2C_only_change_recvprecommits_and_commit. rewrite H2 in H. clear H2.
+    assert (st_first_valid_proposal (state_transition_2_msg_C_precommit e prev_state msg precommit) = st_first_valid_proposal prev_state).
+    apply st_2C_only_change_recvprecommits_and_commit. rewrite H2 in H. clear H2.
+    assert (st_received_valid_proposal_from (state_transition_2_msg_C_precommit e prev_state msg precommit) = st_received_valid_proposal_from prev_state).
+    apply st_2C_only_change_recvprecommits_and_commit. rewrite H2 in H. clear H2.
+    assert (st_vote (state_transition_2_msg_C_precommit e prev_state msg precommit) = st_vote prev_state).
+    apply st_2C_only_change_recvprecommits_and_commit. rewrite H2 in H. clear H2.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    
+    assert (st_first_received_proposal (state_transition_2_msg_B_blame e prev_state msg blame) = st_first_received_proposal prev_state).
+    apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. clear H2.
+    assert (st_first_valid_proposal (state_transition_2_msg_B_blame e prev_state msg blame) = st_first_valid_proposal prev_state).
+    apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. clear H2.
+    assert (st_received_valid_proposal_from (state_transition_2_msg_B_blame e prev_state msg blame) = st_received_valid_proposal_from prev_state).
+    apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. clear H2.
+    assert (st_vote (state_transition_2_msg_B_blame e prev_state msg blame) = st_vote prev_state).
+    apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. clear H2.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+
+    assert (st_first_received_proposal (state_transition_2_msg_A_quit e prev_state msg qt) = st_first_received_proposal prev_state).
+    apply st_2A_only_change_quit_time. rewrite H2 in H. clear H2.
+    assert (st_first_valid_proposal (state_transition_2_msg_A_quit e prev_state msg qt) = st_first_valid_proposal prev_state).
+    apply st_2A_only_change_quit_time.   rewrite H2 in H. clear H2.
+    assert (st_received_valid_proposal_from (state_transition_2_msg_A_quit e prev_state msg qt) = st_received_valid_proposal_from prev_state).
+    apply st_2A_only_change_quit_time.  rewrite H2 in H. clear H2.
+    assert (st_vote (state_transition_2_msg_A_quit e prev_state msg qt) = st_vote prev_state).
+    apply st_2A_only_change_quit_time.  rewrite H2 in H. clear H2.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+
+    assert (st_first_received_proposal (state_transition_2_msg_D_highest_cert e prev_state msg cert) = st_first_received_proposal prev_state).
+    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. clear H2.
+    assert (st_first_valid_proposal (state_transition_2_msg_D_highest_cert e prev_state msg cert) = st_first_valid_proposal prev_state).
+    apply st_2D_only_change_dynamic_cert.   rewrite H2 in H. clear H2.
+    assert (st_received_valid_proposal_from (state_transition_2_msg_D_highest_cert e prev_state msg cert) = st_received_valid_proposal_from prev_state).
+    apply st_2D_only_change_dynamic_cert.  rewrite H2 in H. clear H2.
+    assert (st_vote (state_transition_2_msg_D_highest_cert e prev_state msg cert) = st_vote prev_state).
+    apply st_2D_only_change_dynamic_cert.  rewrite H2 in H. clear H2.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+
+    destruct_with_eqn (node =? st_node prev_state).
+    simpl in H. 
+
+    assert (st_first_received_proposal (state_transition_3_trigger_timeout e prev_state timeout node round expire_time) = st_first_received_proposal prev_state).
+    apply st_3_only_change_new_view_timeouted. rewrite H2 in H. clear H2.
+    assert (st_first_valid_proposal (state_transition_3_trigger_timeout e prev_state timeout node round expire_time) = st_first_valid_proposal prev_state).
+    apply st_3_only_change_new_view_timeouted.  rewrite H2 in H. clear H2.
+    assert (st_received_valid_proposal_from (state_transition_3_trigger_timeout e prev_state timeout node round expire_time) = st_received_valid_proposal_from prev_state).
+    apply st_3_only_change_new_view_timeouted.  rewrite H2 in H. clear H2.
+    assert (st_vote (state_transition_3_trigger_timeout e prev_state timeout node round expire_time) = st_vote prev_state).
+    apply st_3_only_change_new_view_timeouted. rewrite H2 in H. clear H2.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+
+    simpl in H. 
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+    destruct H. contradiction. destruct H. contradiction. destruct H. contradiction. contradiction.
+Qed.
+
+(* do not do others right now. *)
+(* need much more information. If receive precommit, then the voter must be in replicas, not in previous recv_pre_commit_from, but in the new one. *)
+Lemma st_change_recv_pc_from_only_if_recv_precommit_or_timeout_status:
+    forall n:Node, forall i:nat, forall e:Event, 
+    let prev_state:= state_after_node_id n i in
+    let new_state:=state_after_node_id n (S i) in
+    ((new_state.(st_received_precommit_from) <> prev_state.(st_received_precommit_from))) -> 
+    node_id_to_event n (S i) = Some e ->
+    ((exists t_node t_round t_expire_time, 
+        ev_trigger e = Some (trigger_timeout timeout_quit_status t_node t_round t_expire_time) /\
+        t_round = prev_state.(st_round) /\
+        t_expire_time = e.(ev_time)) \/
+    (exists msg, 
+        ev_trigger e = Some (trigger_msg_receive msg) /\
+        ((exists precommit, msg.(msg_content) = msg_precommit precommit)))).
+    intros.
+    unfold new_state in H.
+    assert (state_after_node_id n (S i) = state_transition e (state_after_node_id n i)). 
+    remember (state_after_node_id n i) as state1.
+    rewrite state_after_node_id_one_level.
+    rewrite H0.
+    simpl.
+    rewrite Heqstate1. auto.
+    rewrite H1 in H.
+    replace (state_after_node_id n i) with prev_state in H.
+    2:auto.
+    unfold state_transition in H.
+    destruct_with_eqn (negb (st_node prev_state =? ev_node e)).
+     contradiction.
+    destruct_with_eqn (st_committed prev_state). contradiction.
+    destruct_with_eqn (st_quit_round_time prev_state). 
+    unfold state_transition_1_quit_round in H. 
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (msg_content msg). contradiction. 
+    assert (st_received_precommit_from (state_transition_2_msg_E_vote e prev_state msg vote) = prev_state.(st_received_precommit_from)).
+    apply st_2E_only_change_all_certs_AND_dynamic_certs. rewrite H2 in H. clear H2. 
+    all:(try contradiction).
+    assert (st_received_precommit_from (state_transition_2_msg_D_highest_cert e prev_state msg cert) = prev_state.(st_received_precommit_from)).
+    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. clear H2.
+    all:(try contradiction).
+
+    destruct_with_eqn timeout.
+    all:(try contradiction).
+    destruct_with_eqn (round =? st_round prev_state).
+    left. exists node, round, (e.(ev_time)). split. 
+
+    assert (e.(ev_time) = expire_time).
+    apply event_triggered_by_timeout_at_expire_time with (n:=n) (i:=(S i)) (e:=e) (timeout:=timeout_quit_status) (t_node:=node) (t_round:=round) (t_expire_time:=expire_time). auto. auto. rewrite H2.
+    auto. split. 
+    apply Nat.eqb_eq. auto. auto. contradiction.
+
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (n_replicas<=?msg_sender msg).
+    contradiction.
+    unfold state_transition_2_trigger_msg in H.
+    destruct_with_eqn (msg_content msg).
+    
+    assert (st_received_precommit_from (state_transition_2_msg_F_proposal e prev_state msg proposal) = st_received_precommit_from prev_state).
+    apply st_2F_only_change_proposal_related. rewrite H2 in H. clear H2. contradiction.
+    assert (st_received_precommit_from (state_transition_2_msg_E_vote e prev_state msg vote) = st_received_precommit_from prev_state).
+    apply st_2E_only_change_all_certs_AND_dynamic_certs. rewrite H2 in H. clear H2. contradiction.
+    right. exists msg. split. auto. exists precommit. auto. 
+    assert (st_received_precommit_from (state_transition_2_msg_B_blame e prev_state msg blame) = st_received_precommit_from prev_state).
+    apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. clear H2. contradiction.
+
+    assert (st_received_precommit_from (state_transition_2_msg_A_quit e prev_state msg qt) = st_received_precommit_from prev_state).
+    apply st_2A_only_change_quit_time. rewrite H2 in H. clear H2. contradiction.
+
+    assert (st_received_precommit_from (state_transition_2_msg_D_highest_cert e prev_state msg cert) = st_received_precommit_from prev_state).
+    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. clear H2. contradiction.
+
+    destruct_with_eqn (negb (node =? st_node prev_state)).
+    all:(try contradiction).
+    unfold state_transition_3_trigger_timeout in H.
+    destruct_with_eqn timeout. all:(try contradiction).
+Qed.
+
+Lemma st_precommits_always_non_repeat_subset:
+    forall n i, 
+    let state:=state_after_node_id n i in
+    is_nonrepeat_subset_replicas state.(st_received_precommit_from) = true.
+    intros.
+    unfold state.
+    clear state.
+    induction i.
+    simpl. auto.
+    assert (st_received_precommit_from (state_after_node_id n (S i))= st_received_precommit_from (state_after_node_id n i) \/ ~st_received_precommit_from (state_after_node_id n (S i))= st_received_precommit_from (state_after_node_id n i)).
+    destruct (list_eq_dec Node Nat.eqb nat_eqb_eq_single nat_eqb_eq_single_reverse (st_received_precommit_from (state_after_node_id n i)) (st_received_precommit_from (state_after_node_id n (S i)))). left. auto. right. auto.
+    destruct H.
+    rewrite H. auto.
+    destruct_with_eqn (node_id_to_event n (S i)).
+    (* remember (state_after_node_id n i) as prev_state. *)
+    assert ((exists t_node t_round t_expire_time, 
+        ev_trigger e = Some (trigger_timeout timeout_quit_status t_node t_round t_expire_time) /\
+        t_round = (state_after_node_id n i).(st_round) /\
+        t_expire_time = e.(ev_time)) \/
+    (exists msg, 
+        ev_trigger e = Some (trigger_msg_receive msg) /\
+        ((exists precommit, msg.(msg_content) = msg_precommit precommit)))).
+    apply st_change_recv_pc_from_only_if_recv_precommit_or_timeout_status with (n:=n) (i:=i) (e:=e). auto. auto. 
+    2:{
+        remember (state_after_node_id n i) as prev_state.
+        rewrite state_after_node_id_one_level in H.
+        rewrite Heqo in H. simpl in H. rewrite Heqprev_state in H. auto.
+    }
+    (* the event filters seem to not help? *)
+    destruct H0.
+    destruct H0.
+    destruct H0.
+    destruct H0.
+    destruct H0.
+    destruct H1.
+    rewrite state_after_node_id_one_level.
+    rewrite Heqo.
+    simpl.
+    unfold state_transition.
+    destruct_with_eqn (negb (st_node (state_after_node_id n i) =? ev_node e)). auto.
+    destruct_with_eqn (st_committed (state_after_node_id n i)). auto.
+    destruct_with_eqn (st_quit_round_time (state_after_node_id n i)). 
+    unfold state_transition_1_quit_round.
+    rewrite H0.
+    rewrite H1.
+    rewrite Nat.eqb_refl with (x:=(st_round (state_after_node_id n i))).
+    simpl. auto.
+    rewrite H0.
+    destruct_with_eqn (negb (x =? st_node (state_after_node_id n i))).
+    simpl. auto.
+    simpl. auto.
+    destruct H0.
+    destruct H0.
+    destruct H1.
+    rewrite state_after_node_id_one_level.
+    rewrite Heqo.
+    simpl.
+    unfold state_transition.
+    destruct_with_eqn (negb (st_node (state_after_node_id n i) =? ev_node e)). auto.
+    destruct_with_eqn (st_committed (state_after_node_id n i)). auto.
+    destruct_with_eqn (st_quit_round_time (state_after_node_id n i)). 
+    unfold state_transition_1_quit_round.
+    rewrite H0.
+    rewrite H1.
+    auto.
+    rewrite H0.
+    destruct_with_eqn (n_replicas <=? msg_sender x).
+    auto.
+    unfold state_transition_2_trigger_msg.
+    rewrite H1.
+    unfold state_transition_2_msg_C_precommit.
+    destruct_with_eqn (n_replicas <=? pc_voter x0).
+    auto.
+    destruct_with_eqn (pc_round x0 =? st_round (state_after_node_id n i)).
+    destruct_with_eqn (st_first_valid_proposal (state_after_node_id n i)).
+    destruct_with_eqn (p_block p =? pc_block x0).
+    destruct_with_eqn (1+n_faulty<=?length (st_received_precommit_from (state_set_receive_precommit (state_after_node_id n i) x0))).
+    unfold state_set_receive_precommit.
+    simpl.
+    destruct_with_eqn (is_element (pc_voter x0) (st_received_precommit_from (state_after_node_id n i))).
+    auto.
+    simpl. 
+    unfold is_nonrepeat_subset_replicas.
+    simpl.
+    rewrite Heqb6.
+    destruct_with_eqn (is_element (pc_voter x0) replicas).
+    unfold is_nonrepeat_subset_replicas in IHi.
+    auto.
+
+
+
+
+
+
+Qed.
+
+Lemma st_commit_false_implies_not_enough_precommits:
+    forall n:Node, forall i:nat, forall e:Event,
+        node_id_to_event n i = Some e ->
+        let state:=state_after_node_id n i in
+        state.(st_committed) = false ->
+        is_quorum (state.(st_received_precommit_from)) = false.
+    intros.
+
+Qed.
 
 (* delayed because must prove that commit-false implies <=f precommits*)
 Lemma st_change_commited_only_if_recv_precommit:
@@ -1967,10 +2300,10 @@ Lemma st_change_commited_only_if_recv_precommit:
 
     rewrite H0 in H1. discriminate.
     assert ((state_transition_2_msg_E_vote e prev_state).(st_committed) = prev_state.(st_committed)).
-    apply st_2E_only_change_all_certs_AND_dynamic_certs.
+    apply st_2E_only_change_dynamic_certs.
     rewrite H in H1. all: (try (rewrite H0 in H1; discriminate)).
     assert ((state_transition_2_msg_D_highest_cert e prev_state).(st_committed) = prev_state.(st_committed)).
-    apply st_2D_only_change_all_cert_AND_dynamic_cert.
+    apply st_2D_only_change_dynamic_cert.
     rewrite H in H1. all: (try (rewrite H0 in H1; discriminate)).
     destruct_with_eqn timeout.
     all: (try (rewrite H0 in H1; discriminate)).

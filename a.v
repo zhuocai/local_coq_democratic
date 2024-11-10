@@ -43,5 +43,13 @@ Theorem bound: forall n:nat, steps n <= 10.
 
 Qed.
 
+Theorem check: 
+    (exists n:nat, 
+        n = n+1) -> False.
+    intros.
+    destruct H.
+Qed.
+(* extract hint *)
+
 
 End AMod.
