@@ -34,43 +34,6 @@ Definition BlockType : Type := nat.
 Definition is_element (a : nat) (b : list nat) : bool :=
   existsb (fun x => Nat.eqb x a) b.
 
-Variable isHonest: Node -> bool. 
-
-Variable n_faulty: nat. 
-Hypothesis n_positive: n_faulty >= 1.
-Definition n_replicas: nat := 2*n_faulty+1.
-
-(* #total nodes = 2*n_faulty+1. Actual faulty nodes: <= n_faulty *)
-
-Definition replicas: list Node := List.seq 0 n_replicas.
-
-Hypothesis honest_majority: 
-    length (filter isHonest replicas) >= 1+n_faulty.
-
-
-Definition leaderOfRound (r: nat): Node := (r mod (n_replicas)).
-
-Fixpoint is_nonrepeat (nodes: list Node): bool:=
-    match nodes with
-    | [] => true
-    | n::nodes' => if is_element n nodes' then false else is_nonrepeat nodes'
-    end.
-
-Fixpoint is_subset_replicas (nodes: list Node):bool:=
-    match nodes with
-    | [] => true
-    | n::nodes' => if is_element n replicas then is_subset_replicas nodes' else false
-    end.
-
-Definition is_nonrepeat_subset_replicas (nodes: list Node):bool:=
-    is_nonrepeat nodes && is_subset_replicas nodes.
-
-(* a quorum is a nonrepeat subset of replicas *)
-
-Definition is_quorum (nodes: list Node):bool:=
-    is_nonrepeat_subset_replicas nodes && ((1+n_faulty) <=? length nodes).
-
-
 Record Certificate: Type := mkCertificate {
   c_block : BlockType;
   c_round : nat;
@@ -79,6 +42,8 @@ Record Certificate: Type := mkCertificate {
 
 Definition certificate_beq (c1 c2: Certificate): bool :=
     Nat.eqb c1.(c_block) c2.(c_block) && Nat.eqb c1.(c_round) c2.(c_round) && list_beq Node Nat.eqb c1.(c_voters) c2.(c_voters).
+
+
 
 
 Record ProposalType: Type := mkProposalType {
@@ -236,7 +201,19 @@ Definition event_beq (e1 e2: Event): bool :=
 
 (* ############################ PART 2 replicas, n, f ########################*)
 
+Variable isHonest: Node -> bool. 
 
+Variable n_faulty: nat. 
+
+(* #total nodes = 2*n_faulty+1. Actual faulty nodes: <= n_faulty *)
+
+Definition replicas: list Node := List.seq 0 (2*n_faulty+1).
+
+Hypothesis honest_majority: 
+    length (filter isHonest replicas) >= 1+n_faulty.
+
+
+Definition leaderOfRound (r: nat): Node := (r mod (2*n_faulty+1)).
 
 (* =========================== PART 2 END ========================== *)
 
@@ -554,12 +531,6 @@ Definition state_set_recv_cert (curr_state:StateType) (cert:Certificate): StateT
         else curr_state
     end.
 
-Definition state_set_recv_opt_cert (curr_state:StateType) (o_cert:option Certificate) :StateType:=
-    match o_cert with
-    | None => curr_state
-    | Some cert => state_set_recv_cert curr_state cert
-    end.
-
 Definition state_set_new_view_timeout (curr_state:StateType): StateType:=
     mkState
         curr_state.(st_node)
@@ -590,7 +561,7 @@ Definition is_proposal_valid_cert (proposal: ProposalType) (curr_state: StateTyp
     && (
         match curr_state.(st_locked_highest_cert) with
         | None => true
-        | Some cert => (cert.(c_round) <=? proposal.(p_round)) && is_quorum cert.(c_voters)
+        | Some cert => cert.(c_round) <=? proposal.(p_round)
         end
     ). 
 
@@ -619,140 +590,203 @@ Definition is_proposal_valid_cert (proposal: ProposalType) (curr_state: StateTyp
 
  *)
 
-Definition state_transition_2_msg_A_quit (e:Event) (curr_state:StateType) (msg:MsgType) (qt:QuitType):StateType:=
-    match qt with
-    | quit_conflict qc => 
-        if qc.(qc_round) =? curr_state.(st_round) then 
-            state_set_receive_qt curr_state qt e.(ev_time)
-        else curr_state
-    | quit_blame qb => 
-        if qb.(qb_round) =? curr_state.(st_round) then 
-            state_set_receive_qt curr_state qt e.(ev_time)
-        else curr_state
+Definition state_transition_2_msg_A_quit (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+        | Some(trigger_msg_receive msg) =>
+            match msg.(msg_content) with
+            | msg_quit qt => 
+                match qt with
+                | quit_conflict qc => 
+                    if qc.(qc_round) =? curr_state.(st_round) then 
+                        state_set_receive_qt curr_state qt e.(ev_time)
+                    else curr_state
+                | quit_blame qb => 
+                    if qb.(qb_round) =? curr_state.(st_round) then 
+                        state_set_receive_qt curr_state qt e.(ev_time)
+                    else curr_state
+                end
+            | _ => curr_state
+            end
+        | _ => curr_state
     end.
 
-Definition state_transition_2_msg_B_blame (e:Event) (curr_state:StateType) (msg:MsgType) (blame:BlameType):StateType:=
-    if n_replicas <=? blame.(b_blamer) then curr_state else
-    if blame.(b_round) =? curr_state.(st_round) then
-    let temp_state := state_set_receive_blame curr_state blame in
-    if (1+n_faulty) <=? (length temp_state.(st_received_blames)) then 
-        state_set_quit_blame temp_state e.(ev_time)
-    else temp_state
-    else curr_state.
+Definition state_transition_2_msg_B_blame (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+        | Some(trigger_msg_receive msg) =>
+            match msg.(msg_content) with
+            | msg_blame blame => (* check if blame reaches f+1*)
+                if blame.(b_round) =? curr_state.(st_round) then
+                    let temp_state := state_set_receive_blame curr_state blame in
+                    if (1+n_faulty) <=? (length temp_state.(st_received_blames)) then 
+                        state_set_quit_blame temp_state e.(ev_time)
+                    else temp_state
+                else curr_state
+            | _ => curr_state
+            end
+        | _ => curr_state
+    end.
 
-Definition state_transition_2_msg_C_precommit (e:Event) (curr_state:StateType) (msg:MsgType) (precommit:PrecommitType):StateType:=
-    if n_replicas<=? precommit.(pc_voter) then curr_state else
-    if (precommit.(pc_round) =? curr_state.(st_round)) then 
-    match curr_state.(st_first_valid_proposal) with 
-        | None => curr_state 
-        | Some valid_proposal =>
-        if (valid_proposal.(p_block) =? precommit.(pc_block)) then 
-            let temp_state:= state_set_receive_precommit curr_state precommit in (* if curr_state has received f+1 precommits already, would have committed. will not enter this function*)
-            if (1+n_faulty) <=? (length temp_state.(st_received_precommit_from)) then
-                state_set_commit temp_state e.(ev_time)
-            else temp_state
-        else curr_state (* ignore precommit for other proposals*)
-    end
-else curr_state (*ignore precommit for other rounds*).
+Definition state_transition_2_msg_C_precommit (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+        | Some(trigger_msg_receive msg) =>
+            match msg.(msg_content) with
+            | msg_precommit precommit => (*require at least received proposal*)
+                if (precommit.(pc_round) =? curr_state.(st_round)) then 
+                    match curr_state.(st_first_valid_proposal) with 
+                        | None => curr_state 
+                        | Some valid_proposal =>
+                        if (valid_proposal.(p_block) =? precommit.(pc_block)) then 
+                            let temp_state:= state_set_receive_precommit curr_state precommit in (* if curr_state has received f+1 precommits already, would have committed. will not enter this function*)
+                            if (1+n_faulty) <=? (length temp_state.(st_received_precommit_from)) then
+                                state_set_commit temp_state e.(ev_time)
+                            else temp_state
+                        else curr_state (* ignore precommit for other proposals*)
+                    end
+                else curr_state (*ignore precommit for other rounds*)
+            | _ => curr_state
+            end
+        | _ => curr_state
+    end.
 
-Definition state_transition_2_msg_D_highest_cert (e:Event) (curr_state:StateType) (msg:MsgType) (cert:Certificate) :StateType:=
-    if (e.(ev_node) =? (leaderOfRound curr_state.(st_round))) && (negb curr_state.(st_new_view_timeouted)) 
-    then state_set_recv_cert curr_state cert else curr_state.
+Definition state_transition_2_msg_D_highest_cert (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+        | Some(trigger_msg_receive msg) =>
+            match msg.(msg_content) with
+            | msg_highest_cert cert => 
+                if e.(ev_node) =? (leaderOfRound curr_state.(st_round)) then 
+                    if curr_state.(st_new_view_timeouted) then curr_state (*too late*)
+                        else state_set_recv_cert curr_state cert
+                else curr_state
+            | _ => curr_state
+            end
+        | _ => curr_state
+    end.
 
 (* #def 2E state *)
-Definition state_transition_2_msg_E_vote (e:Event) (curr_state:StateType) (msg:MsgType) (vote:VoteType):StateType:=
-    if n_replicas<=? vote.(v_voter) then curr_state else
-    if vote.(v_round) =? curr_state.(st_round) then state_set_receive_vote curr_state vote else curr_state.
+Definition state_transition_2_msg_E_vote (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+        | Some(trigger_msg_receive msg) =>
+            match msg.(msg_content) with
+            | msg_vote vote => 
+                if vote.(v_round) =? curr_state.(st_round) then 
+                    state_set_receive_vote curr_state vote
+                else curr_state
+            | _ => curr_state
+            end
+        | _ => curr_state
+    end.
 
 (* #def 2F state*)
-(* update also update cert *)
-(* require voter in replicas *)
-Definition state_transition_2_msg_F_proposal (e:Event) (curr_state:StateType) (msg:MsgType) (proposal:ProposalType):StateType:=
-    if n_replicas <=? proposal.(p_proposer)  then curr_state
-    else
-    match curr_state.(st_first_received_proposal) with
-    | None  =>
-        if is_proposal_valid_cert proposal curr_state then
-            state_set_recv_opt_cert (state_set_first_valid_proposal curr_state proposal  msg.(msg_sender) e.(ev_node)) proposal.(p_cert)
-        else if is_proposal_valid_round_proposer proposal curr_state then
-            state_set_recv_opt_cert (state_set_first_received_proposal curr_state proposal) proposal.(p_cert)
-        else curr_state 
-    | Some first_proposal =>
-        if proposal_beq proposal first_proposal then (*receiving the same first proposal again*)
-            match curr_state.(st_first_valid_proposal) with 
-            | None => curr_state (*receiving the same cert-invalid proposal, ignore*)
-            | Some valid_proposal => (* the first proposal is valid, now receiving one more proposal that is the same. *)
-                if proposal_beq proposal valid_proposal then 
-                    if 1+n_faulty <=? (length curr_state.(st_received_valid_proposal_from)) then (*already pre-committed. ignore the msg*)
-                        curr_state
-                    else (*need more proposals*)
-                        let temp_state := state_set_more_proposals curr_state proposal msg.(msg_sender) in
-                        if (1+n_faulty) <=? (length (temp_state.(st_received_valid_proposal_from))) then (*trigger precommit start*) 
-                            state_set_precommit_start temp_state e.(ev_time)
-                    else temp_state
-                else (* should not happen in our logic *)
-                    curr_state
-            end
-        else (* receiving a different proposal | totally-invalid or cert-invalid or valid | total_invalid => ignore / otherwise => duplicate report quit *)
-            if is_proposal_valid_round_proposer proposal curr_state then
-                state_set_quit_conflict curr_state e.(ev_time)
+
+Definition state_transition_2_msg_F_proposal (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+    | Some(trigger_msg_receive msg) =>
+    match msg.(msg_content) with
+    | msg_propose proposal =>
+        match curr_state.(st_first_received_proposal) with
+        | None  =>
+            if is_proposal_valid_cert proposal curr_state then
+                state_set_first_valid_proposal curr_state proposal  msg.(msg_sender) e.(ev_node)
+            else if is_proposal_valid_round_proposer proposal curr_state then
+                state_set_first_received_proposal curr_state proposal
             else curr_state
+        | Some first_proposal =>
+            if proposal_beq proposal first_proposal then (*receiving the same first proposal again*)
+                match curr_state.(st_first_valid_proposal) with 
+                | None => curr_state (*receiving the same cert-invalid proposal, ignore*)
+                | Some valid_proposal => (* the first proposal is valid, now receiving one more proposal that is the same. *)
+                    if proposal_beq proposal valid_proposal then 
+                        if 1+n_faulty <=? (length curr_state.(st_received_valid_proposal_from)) then (*already pre-committed. ignore the msg*)
+                            curr_state
+                        else (*need more proposals*)
+                            let temp_state := state_set_more_proposals curr_state proposal msg.(msg_sender) in
+                            if (1+n_faulty) <=? (length (temp_state.(st_received_valid_proposal_from))) then (*trigger precommit start*) 
+                                state_set_precommit_start temp_state e.(ev_time)
+                        else temp_state
+                    else (* should not happen in our logic *)
+                        curr_state
+                end
+            else (* receiving a different proposal | totally-invalid or cert-invalid or valid | total_invalid => ignore / otherwise => duplicate report quit *)
+                if is_proposal_valid_round_proposer proposal curr_state then
+                    state_set_quit_conflict curr_state e.(ev_time)
+                else curr_state
+        end
+    | _ => curr_state (*other msg type*)
+    end
+    | _ => curr_state (*other trigger type*)
     end.
 
 (* #def state transition*)
-(* already excluded msg_sender not in range issue *)
-Definition state_transition_2_trigger_msg (e:Event) (curr_state:StateType) (msg:MsgType):StateType:=
-    match msg.(msg_content) with
-    | msg_quit qt => 
-        state_transition_2_msg_A_quit e curr_state msg qt
-    | msg_blame blame => (* check if blame reaches f+1*)
-        state_transition_2_msg_B_blame e curr_state msg blame
-    | msg_precommit precommit => (*require at least received proposal*)
-        state_transition_2_msg_C_precommit e curr_state msg precommit
-    | msg_highest_cert cert => 
-        state_transition_2_msg_D_highest_cert e curr_state msg cert
-    | msg_vote vote => (* vote is used to form certificates  *)
-        state_transition_2_msg_E_vote e curr_state msg vote
-    | msg_propose proposal =>
-        state_transition_2_msg_F_proposal e curr_state msg proposal
+
+Definition state_transition_2_trigger_msg (e:Event) (curr_state:StateType):StateType:=
+    match e.(ev_trigger) with
+        | Some(trigger_msg_receive msg) =>
+            match msg.(msg_content) with
+            | msg_quit qt => 
+                state_transition_2_msg_A_quit e curr_state
+            | msg_blame blame => (* check if blame reaches f+1*)
+                    state_transition_2_msg_B_blame e curr_state
+            | msg_precommit precommit => (*require at least received proposal*)
+                state_transition_2_msg_C_precommit e curr_state
+            | msg_highest_cert cert => 
+                state_transition_2_msg_D_highest_cert e curr_state
+            | msg_vote vote => (* vote is used to form certificates  *)
+                state_transition_2_msg_E_vote e curr_state
+            | msg_propose proposal =>
+                state_transition_2_msg_F_proposal e curr_state
+        end     
+    | _ => curr_state    
     end.
 
-Definition state_transition_3_trigger_timeout (e:Event) (curr_state:StateType) (timeout:TimeoutType) (t_node:Node) (t_round:nat) (t_expire_time:nat):=
-    match timeout with
-    | timeout_proposal => 
-        curr_state (* might send blame out | but handled in generating trigger*)
-    | timeout_precommit =>
-        curr_state (* might send precommit message | but handled in generating trigger *)
-    | timeout_quit_status =>
-        curr_state (* should not happen | already handled in the beginning of the function *)
-    | timeout_new_view_wait =>
-        (* should broadcast new proposals | to handle in generating trigger *)
-        state_set_new_view_timeout curr_state
+Definition state_transition_3_trigger_timeout (e:Event) (curr_state:StateType):=
+    if negb (curr_state.(st_node) =? e.(ev_node)) then curr_state
+    else if curr_state.(st_committed) then curr_state 
+    else match curr_state.(st_quit_round_time) with 
+    | None =>
+        match e.(ev_trigger) with
+        | Some(trigger_timeout timeout t_node t_round t_expire_time) =>
+             match timeout with
+                | timeout_proposal => 
+                    curr_state (* might send blame out | but handled in generating trigger*)
+                | timeout_precommit =>
+                    curr_state (* might send precommit message | but handled in generating trigger *)
+                | timeout_quit_status =>
+                    curr_state (* should not happen | already handled in the beginning of the function *)
+                | timeout_new_view_wait =>
+                    (* should broadcast new proposals | to handle in generating trigger *)
+                    state_set_new_view_timeout curr_state
+            end
+        | _ => curr_state
+        end
+    | _ => curr_state
     end.
 
 Definition state_transition_1_quit_round (e:Event) (curr_state:StateType): StateType:=
-    match e.(ev_trigger) with
-    | None => curr_state
-    | Some(trigger_msg_receive msg) =>
-        match msg.(msg_content) with
-        | msg_vote vote => 
-            state_transition_2_msg_E_vote e curr_state msg vote
-        | msg_highest_cert cert =>
-            state_transition_2_msg_D_highest_cert e curr_state msg cert
-        | _ => curr_state
+    match curr_state.(st_quit_round_time) with 
+    | Some quit_time =>  (* receiving votes | waiting for delta timeout to enter next round*)
+        match e.(ev_trigger) with
+        | None => curr_state
+        | Some(trigger_msg_receive msg) =>
+            match msg.(msg_content) with
+            | msg_vote vote => 
+                state_transition_2_msg_E_vote e curr_state
+            | msg_highest_cert cert =>
+                state_transition_2_msg_D_highest_cert e curr_state
+            | _ => curr_state
+            end
+        | Some (trigger_timeout timeout t_node t_round t_expire_time) =>
+            match timeout with
+            | timeout_quit_status => 
+                if t_round =? curr_state.(st_round) then 
+                    state_set_enter_new_round curr_state e.(ev_time)
+                else curr_state
+            | _ => curr_state
+            end
         end
-    | Some (trigger_timeout timeout t_node t_round t_expire_time) =>
-        match timeout with
-        | timeout_quit_status => 
-            if t_round =? curr_state.(st_round) then 
-                state_set_enter_new_round curr_state e.(ev_time)
-            else curr_state
-        | _ => curr_state
-        end
+    | _ => curr_state
     end.
 
 (* #def state transition*)
-(* update if msg_sender not in replicas, or voter/proposer not in replicas. Ignore *)
 Definition state_transition (e: Event) (curr_state: StateType) : StateType := 
     if negb (curr_state.(st_node) =? e.(ev_node)) then curr_state
     else if curr_state.(st_committed) then curr_state 
@@ -763,12 +797,9 @@ Definition state_transition (e: Event) (curr_state: StateType) : StateType :=
         match e.(ev_trigger) with
         | None => curr_state
         | Some(trigger_msg_receive msg) =>
-            if (n_replicas <=?msg.(msg_sender)) then curr_state
-            else state_transition_2_trigger_msg e curr_state msg
-        | Some(trigger_timeout timeout t_node t_round t_expire_time) => 
-            if (negb (t_node =? curr_state.(st_node))) then curr_state
-            else
-            state_transition_3_trigger_timeout e curr_state timeout t_node t_round t_expire_time
+            state_transition_2_trigger_msg e curr_state
+        | Some(trigger_timeout timeout t_node t_round t_expire_time) =>
+           state_transition_3_trigger_timeout e curr_state
         end
     end.
 
@@ -778,6 +809,9 @@ Definition state_transition_op (event: option Event) (state:StateType): StateTyp
     | Some e => state_transition e state
     end. 
 
+(* 
+Variable state_before_event: Event -> StateType. 
+Variable state_after_event: Event -> StateType.  *)
 
 Definition init_state (n:Node): StateType := mkState n 0 false None None (fun r b => []) 0 None None [] None [] None None [] false.
 
@@ -786,8 +820,8 @@ Definition init_state (n:Node): StateType := mkState n 0 false None None (fun r 
 (* #properties state transition | from specific rules to general rules *)
 
 Lemma st_2A_only_change_quit_time:
-    forall e:Event, forall prev_state msg qt, 
-        let new_state:= (state_transition_2_msg_A_quit e prev_state msg qt) in 
+    forall e:Event, forall prev_state:StateType,
+        let new_state:= (state_transition_2_msg_A_quit e prev_state) in 
         new_state.(st_node) = prev_state.(st_node) /\
         new_state.(st_round) = prev_state.(st_round) /\
         new_state.(st_committed) = prev_state.(st_committed) /\
@@ -806,19 +840,26 @@ Lemma st_2A_only_change_quit_time:
         intros.
         unfold new_state.
         unfold state_transition_2_msg_A_quit.
+        destruct_with_eqn (ev_trigger e).
+        destruct_with_eqn t.
+        destruct_with_eqn (msg_content msg).
+        repeat split.
+        repeat split.
+        repeat split.
+        repeat split.
         destruct_with_eqn qt.
         destruct_with_eqn (qc_round qc =? st_round prev_state).
         unfold state_set_receive_qt.
         repeat split.
         repeat split.
         destruct_with_eqn (qb_round qb =? st_round prev_state).
-        repeat split. repeat split. 
+        repeat split. repeat split. repeat split. repeat split. repeat split.
 
 Qed.
 
 Lemma st_2B_only_change_recvblames_and_quit_time:
-    forall e:Event, forall prev_state msg blame, 
-    let new_state:= (state_transition_2_msg_B_blame e prev_state msg blame) in
+    forall e:Event, forall prev_state:StateType, 
+    let new_state:= (state_transition_2_msg_B_blame e prev_state) in
     new_state.(st_node) = prev_state.(st_node) /\
         new_state.(st_round) = prev_state.(st_round) /\
         new_state.(st_committed) = prev_state.(st_committed) /\
@@ -837,7 +878,10 @@ Lemma st_2B_only_change_recvblames_and_quit_time:
     intros.
     unfold new_state.
     unfold state_transition_2_msg_B_blame.
-    destruct_with_eqn (n_replicas <=? b_blamer blame). repeat split.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (msg_content msg).
+    repeat split. repeat split. repeat split. 
     destruct_with_eqn (b_round blame =? st_round prev_state).
     destruct_with_eqn (1+n_faulty<=?length (st_received_blames (state_set_receive_blame prev_state blame))).
     unfold state_set_quit_blame.
@@ -850,11 +894,15 @@ Lemma st_2B_only_change_recvblames_and_quit_time:
     simpl.
     repeat split.
     repeat split.
+    repeat split.
+    repeat split.
+    repeat split.
+    repeat split.
 Qed.
 
 Lemma st_2C_only_change_recvprecommits_and_commit:
-    forall e:Event, forall prev_state msg precommit, 
-    let new_state:= (state_transition_2_msg_C_precommit e prev_state msg precommit) in
+    forall e:Event, forall prev_state:StateType, 
+    let new_state:= (state_transition_2_msg_C_precommit e prev_state) in
     new_state.(st_node) = prev_state.(st_node) /\
         new_state.(st_round) = prev_state.(st_round) /\
         new_state.(st_locked_highest_cert) = prev_state.(st_locked_highest_cert) /\
@@ -872,7 +920,10 @@ Lemma st_2C_only_change_recvprecommits_and_commit:
     intros.
     unfold new_state.
     unfold state_transition_2_msg_C_precommit.
-    destruct_with_eqn (n_replicas<=?pc_voter precommit). repeat split.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (msg_content msg).
+    repeat split. repeat split. 
     destruct_with_eqn (pc_round precommit =? st_round prev_state).
     destruct_with_eqn (st_first_valid_proposal prev_state).
     destruct_with_eqn (p_block p =? pc_block precommit).
@@ -897,14 +948,13 @@ Lemma st_2C_only_change_recvprecommits_and_commit:
     all:repeat split.
 Qed.
 
-Lemma st_2D_only_change_dynamic_cert:
-    forall e:Event, forall prev_state msg cert,
-    let new_state:= (state_transition_2_msg_D_highest_cert e prev_state msg cert) in
+Lemma st_2D_only_change_all_cert_AND_dynamic_cert:
+    forall e:Event, forall prev_state:StateType,
+    let new_state:= (state_transition_2_msg_D_highest_cert e prev_state) in
     new_state.(st_node) = prev_state.(st_node) /\
     new_state.(st_round) = prev_state.(st_round) /\
     new_state.(st_committed) = prev_state.(st_committed) /\
     new_state.(st_locked_highest_cert) = prev_state.(st_locked_highest_cert) /\
-    new_state.(st_all_certs) = prev_state.(st_all_certs) /\
     new_state.(st_round_start_time) = prev_state.(st_round_start_time) /\
     new_state.(st_first_valid_proposal) = prev_state.(st_first_valid_proposal) /\
     new_state.(st_first_received_proposal) = prev_state.(st_first_received_proposal) /\
@@ -918,10 +968,14 @@ Lemma st_2D_only_change_dynamic_cert:
     intros.
     unfold new_state.
     unfold state_transition_2_msg_D_highest_cert.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (msg_content msg).
+    repeat split. repeat split. repeat split. repeat split. repeat split.
     destruct_with_eqn (ev_node e =? leaderOfRound (st_round prev_state)).
     destruct_with_eqn (st_new_view_timeouted prev_state).
     repeat split. auto.
-    unfold state_set_recv_cert. simpl.
+    unfold state_set_recv_cert.
     destruct_with_eqn (st_dynamic_highest_cert prev_state).
     destruct_with_eqn (c_round c <? c_round cert).
     unfold state_set_dynamic_highest_cert.
@@ -932,8 +986,8 @@ Lemma st_2D_only_change_dynamic_cert:
 Qed.
 
 Lemma st_2E_only_change_all_certs_AND_dynamic_certs:
-    forall e:Event, forall prev_state msg vote,
-    let new_state:= (state_transition_2_msg_E_vote e prev_state msg vote) in
+    forall e:Event, forall prev_state:StateType,
+    let new_state:= (state_transition_2_msg_E_vote e prev_state) in
     new_state.(st_node) = prev_state.(st_node) /\
     new_state.(st_round) = prev_state.(st_round) /\
     new_state.(st_committed) = prev_state.(st_committed) /\
@@ -951,29 +1005,35 @@ Lemma st_2E_only_change_all_certs_AND_dynamic_certs:
     intros.
     unfold new_state.
     unfold state_transition_2_msg_E_vote.
-    destruct_with_eqn (n_replicas<=?v_voter vote). repeat split.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (msg_content msg).
+    repeat split. 
     destruct_with_eqn (v_round vote =? st_round prev_state).
     unfold state_set_receive_vote.
     simpl. all:repeat split.
 Qed.
 
 Lemma st_2F_only_change_proposal_related:
-    forall e:Event, forall prev_state msg proposal,
-    let new_state:= (state_transition_2_msg_F_proposal e prev_state msg proposal) in
+    forall e:Event, forall prev_state:StateType,
+    let new_state:= (state_transition_2_msg_F_proposal e prev_state) in
     new_state.(st_node) = prev_state.(st_node) /\
     new_state.(st_round) = prev_state.(st_round) /\
     new_state.(st_committed) = prev_state.(st_committed) /\
     new_state.(st_locked_highest_cert) = prev_state.(st_locked_highest_cert) /\
+    new_state.(st_dynamic_highest_cert) = prev_state.(st_dynamic_highest_cert) /\
+    new_state.(st_all_certs) = prev_state.(st_all_certs) /\
     new_state.(st_round_start_time) = prev_state.(st_round_start_time) /\
     new_state.(st_received_blames) = prev_state.(st_received_blames) /\
     new_state.(st_received_precommit_from) = prev_state.(st_received_precommit_from) /\
     new_state.(st_new_view_timeouted) = prev_state.(st_new_view_timeouted).
 
     intros.
-    (* rewrite -> H. *)
     unfold new_state.
     unfold state_transition_2_msg_F_proposal.
-    destruct_with_eqn (n_replicas <=? p_proposer proposal). repeat split.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    destruct_with_eqn (msg_content msg).
     destruct_with_eqn (st_first_received_proposal prev_state).
     destruct_with_eqn (proposal_beq proposal p).
     destruct_with_eqn (st_first_valid_proposal prev_state).
@@ -997,39 +1057,19 @@ Lemma st_2F_only_change_proposal_related:
     repeat split.
     destruct_with_eqn (is_proposal_valid_cert proposal prev_state).
     destruct_with_eqn (is_proposal_valid_round_proposer proposal prev_state).
-    unfold state_set_first_valid_proposal.
-    unfold state_set_recv_opt_cert.
-    destruct_with_eqn (p_cert proposal).
-    unfold state_set_recv_cert.
-    simpl.
-    destruct_with_eqn (st_dynamic_highest_cert prev_state).
-    destruct_with_eqn (c_round c0 <? c_round c).
-    unfold state_set_dynamic_highest_cert.
-    all:simpl. 
-    repeat split. repeat split. repeat split. repeat split.
-    unfold state_set_recv_opt_cert.
-    destruct_with_eqn (p_cert proposal).
-    unfold state_set_recv_cert.
-    destruct_with_eqn (st_dynamic_highest_cert (state_set_first_valid_proposal prev_state proposal (msg_sender msg) (ev_node e))).
-    destruct_with_eqn (c_round c0<? c_round c).
-    unfold state_set_dynamic_highest_cert. all:simpl. 
-    repeat split. repeat split. repeat split. repeat split.
+    unfold state_set_first_valid_proposal. simpl. repeat split.
+    unfold state_set_first_valid_proposal. simpl. repeat split.
     unfold is_proposal_valid_round_proposer. 
     destruct_with_eqn (p_round proposal =? st_round prev_state).
     simpl.
     destruct_with_eqn (p_proposer proposal =? leaderOfRound (st_round prev_state)).
-    unfold state_set_recv_opt_cert.
-    destruct_with_eqn (p_cert proposal).
-    unfold state_set_recv_cert.
-    destruct_with_eqn (st_dynamic_highest_cert (state_set_first_received_proposal prev_state proposal )).
-    destruct_with_eqn (c_round c0<? c_round c).
-    unfold state_set_dynamic_highest_cert. all:simpl. 
-    all:repeat split. 
+    unfold state_set_first_received_proposal. simpl. repeat split. repeat split.
+    simpl. all:repeat split. 
 Qed.
 
 Lemma st_2_trigger_msg_only_change_msg_related:
-    forall e:Event, forall prev_state msg,
-    let new_state := (state_transition_2_trigger_msg e prev_state msg) in
+    forall e:Event, forall prev_state:StateType,
+    let new_state:= (state_transition_2_trigger_msg e prev_state) in
     new_state.(st_node) = prev_state.(st_node) /\
     new_state.(st_round) = prev_state.(st_round) /\
     new_state.(st_locked_highest_cert) = prev_state.(st_locked_highest_cert) /\
@@ -1039,9 +1079,11 @@ Lemma st_2_trigger_msg_only_change_msg_related:
     intros.
     unfold new_state.
     unfold state_transition_2_trigger_msg.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
     destruct_with_eqn (msg_content msg).
     repeat split.
-    all:(try apply st_2F_only_change_proposal_related). 
+    all:(try apply st_2F_only_change_proposal_related).
     repeat split.
     all:(try apply st_2E_only_change_all_certs_AND_dynamic_certs).
     repeat split.
@@ -1051,7 +1093,9 @@ Lemma st_2_trigger_msg_only_change_msg_related:
     repeat split.
     all:(try apply st_2A_only_change_quit_time).
     repeat split.
-    all:(try apply st_2D_only_change_dynamic_cert).
+    all:(try apply st_2D_only_change_all_cert_AND_dynamic_cert).
+    repeat split.
+    repeat split.
 Qed.
 
 Lemma st_1_only_keep_node_committed:
@@ -1061,15 +1105,16 @@ Lemma st_1_only_keep_node_committed:
     intros.
     unfold new_state.
     unfold state_transition_1_quit_round.
+    destruct_with_eqn (st_quit_round_time prev_state).
     destruct_with_eqn (ev_trigger e).
     destruct_with_eqn t.
     destruct_with_eqn (msg_content msg).
     split. all:trivial.
     repeat split.
     all:(try apply st_2E_only_change_all_certs_AND_dynamic_certs).
-    repeat split. repeat split. repeat split. 
+    repeat split. repeat split. repeat split.
     repeat split.
-    all:(try apply st_2D_only_change_dynamic_cert).
+    all:(try apply st_2D_only_change_all_cert_AND_dynamic_cert).
     destruct_with_eqn timeout.
     repeat split.
     repeat split.
@@ -1080,8 +1125,8 @@ Lemma st_1_only_keep_node_committed:
 Qed.
 
 Lemma st_3_only_change_new_view_timeouted:
-    forall e:Event, forall prev_state timeout t_node t_round t_expire_time, 
-    let new_state:= (state_transition_3_trigger_timeout e prev_state timeout t_node t_round t_expire_time) in
+    forall e:Event, forall prev_state:StateType, 
+    let new_state:= (state_transition_3_trigger_timeout e prev_state) in
     new_state.(st_node) = prev_state.(st_node) /\
     new_state.(st_round) = prev_state.(st_round) /\
     new_state.(st_committed) = prev_state.(st_committed) /\
@@ -1099,13 +1144,22 @@ Lemma st_3_only_change_new_view_timeouted:
     intros.
     unfold new_state.
     unfold state_transition_3_trigger_timeout.
+    destruct_with_eqn (negb (st_node prev_state =? ev_node e)).
+    repeat split.
+    destruct_with_eqn (st_committed prev_state).
+    repeat split. auto.
+    destruct_with_eqn (st_quit_round_time prev_state).
+    repeat split. auto.
+    destruct_with_eqn (ev_trigger e).
+    destruct_with_eqn t.
+    repeat split. auto.
     destruct_with_eqn timeout.
     repeat split. auto.
     repeat split. auto.
     repeat split. auto.
     unfold state_set_new_view_timeout.
     simpl.
-    repeat split. 
+    repeat split. auto. repeat split. auto.
 Qed.
 
 
@@ -1125,9 +1179,7 @@ Lemma st_only_keeps_node:
     apply st_1_only_keep_node_committed.
     destruct_with_eqn (ev_trigger e).
     destruct_with_eqn t.
-    destruct_with_eqn (n_replicas<=?msg_sender msg). auto.
     apply st_2_trigger_msg_only_change_msg_related.
-    destruct_with_eqn (negb (node=?st_node prev_state)). auto.
     apply st_3_only_change_new_view_timeouted.
     auto.
 Qed.
@@ -1151,15 +1203,16 @@ Lemma st_change_round_only_if_quit_status_timer:
     contradiction.
     destruct_with_eqn (st_quit_round_time prev_state).
     unfold state_transition_1_quit_round in H.
+    rewrite Heqo in H.
     destruct_with_eqn (ev_trigger e).
     destruct_with_eqn t.
     destruct_with_eqn (msg_content msg).
     contradiction.
-    assert ((state_transition_2_msg_E_vote e prev_state msg vote).(st_round) = prev_state.(st_round)).
+    assert ((state_transition_2_msg_E_vote e prev_state).(st_round) = prev_state.(st_round)).
     apply st_2E_only_change_all_certs_AND_dynamic_certs.
     all:(try contradiction). 
-    assert ((state_transition_2_msg_D_highest_cert e prev_state msg cert).(st_round) = prev_state.(st_round)).
-    apply st_2D_only_change_dynamic_cert.
+    assert ((state_transition_2_msg_D_highest_cert e prev_state).(st_round) = prev_state.(st_round)).
+    apply st_2D_only_change_all_cert_AND_dynamic_cert.
     all:(try contradiction).
     destruct_with_eqn timeout.
     all:(try contradiction).
@@ -1169,14 +1222,13 @@ Lemma st_change_round_only_if_quit_status_timer:
     contradiction.
     destruct_with_eqn (ev_trigger e). 
     destruct_with_eqn t.
-    destruct_with_eqn (n_replicas<=? msg_sender msg). contradiction.
-    assert ((state_transition_2_trigger_msg e prev_state msg).(st_round) = prev_state.(st_round)).
+    assert ((state_transition_2_trigger_msg e prev_state).(st_round) = prev_state.(st_round)).
     apply st_2_trigger_msg_only_change_msg_related.
     all:(try contradiction).
-    assert ((state_transition_3_trigger_timeout e prev_state timeout node round expire_time).(st_round) = prev_state.(st_round)).
+    assert ((state_transition_3_trigger_timeout e prev_state).(st_round) = prev_state.(st_round)).
     apply st_3_only_change_new_view_timeouted.
-    destruct_with_eqn (negb (node=? st_node prev_state)).
     all:(try contradiction).
+
 Qed.
 
 
@@ -1201,6 +1253,25 @@ Definition first_event (n:Node):Event:=
     mkEvent n None 0.
 
 
+
+(* not necessary: (* for construction, use destruct_with_eqn *)
+Lemma option_event_not_one_is_some_event: 
+    forall e: option Event, ~e=None -> exists se, e = Some se. 
+    intros.
+    destruct_with_eqn e. 
+    exists e0.
+    trivial.
+    contradiction.
+Qed. *)
+
+(* not necessary: rewrite one using the other, then discriminate  *)
+(* Lemma option_event_cannot_be_done_and_event: 
+    forall e: option Event, forall e':Event, e = Some e' -> e = None -> False.
+    intros.
+    rewrite H in H0. discriminate.
+Qed. *)
+
+
 (* Make events bi-directional inductive *)
 Variable event_to_seq_id: Event -> nat. (* for each node, | for id>=1, this is a partial bijection*)
 (* Variable event_to_inv_seq_id: Event -> nat. *) 
@@ -1219,6 +1290,10 @@ Hypothesis event_id_continuous:
         exists e3, event_to_seq_id e3 = S i.
 
 (* id = 0: for irrelevant events *)
+
+(* this is already assuming the protocol will terminate | don't use it for now*)
+(* Hypothesis event_id_init_last:
+    forall e: Event, direct_next e = None -> event_to_inv_seq_id e = 0. *)
 
 Variable node_id_to_event: Node -> nat -> option Event. (* for each node, this is a partial bijection*)
 Hypothesis node_id_to_event_def_id0:
@@ -1366,6 +1441,49 @@ Definition direct_pred (e: Event): option Event:=
 Definition direct_next (e: Event): option Event:=
     node_id_to_event e.(ev_node) (S (event_to_seq_id e)).
 
+(* seems unnecessary now. *)  
+(* Lemma pred_is_injective:
+    forall e1 e2: Event, direct_pred e1 = direct_pred e2 -> 
+        ~direct_pred e1 = None -> e1 = e2. (* note that the special first events can point to the same None *)
+Admitted. *)
+
+(*seems unnecessary*)
+(* Lemma pred_is_for_same_node:
+    forall e1 e2: Event, direct_pred e1 = Some e2 -> e1.(ev_node) = e2.(ev_node).
+    intros.
+    unfold direct_pred in H.
+    destruct_with_eqn (event_to_seq_id e1).
+    discriminate.
+    rewrite node_id_to_event_infer_node with (n:=(ev_node e1)) (i:=n) (e:=e2). all:(try auto).
+Qed. *)
+
+(*seems unncessary*)
+(* Lemma direct_next_is_injective:
+    forall e1 e2: Event, direct_next e1 = direct_next e2 -> ~direct_next e1 = None -> e1 = e2. (* the last events all point to None | have to prove there exist last event for every node ; *)
+Admitted. *)
+
+(* (seems unnecessary) *)
+(* Lemma direct_next_is_for_same_node:
+    forall e1 e2: Event, direct_next e1 = Some e2 -> e1.(ev_node) = e2.(ev_node).
+Admitted. *)
+
+(* some relation between direct_pred/next and event_id*)
+
+(* Lemma next_id_is_direct_next_if_non_none:
+    forall e1 e2:Event,
+        node_id_to_event (ev_node e1) (S (event_to_seq_id e1)) = Some e2 ->
+           Some e2 = direct_next e1.
+        intros.
+        unfold direct_next.
+        auto.
+Qed. *)
+(* 
+Lemma direct_next_of_none_id_is_none:
+    forall n:Node, forall i:nat, 
+        node_id_to_event n i = None -> node_id_to_event n (S i) = None.
+    Admitted.
+     *)
+
 
     
 (* 
@@ -1406,6 +1524,25 @@ Problem: if receive the first proposal and quit-conflict at the same time. Leave
     forall  *)
 
 
+(* Lemma state_before_first_event:
+    forall n:Node, state_before_event (first_event n) = init_state n.
+    intros.
+    assert (node_id_to_event n 1 = Some (first_event n)).
+    apply node_id_to_event_id1.  
+    unfold state_before_event.
+Qed. *)
+(* Hypothesis state_after_transition_def: 
+    forall e:Event, 
+    state_after_event e = state_transition e (state_before_event e). *)
+(* 
+Hypothesis state_direct_pred_def:
+    forall e1 e2:Event, 
+    direct_pred e2 = Some e1 -> state_after_event e1 = state_before_event e2. *)
+
+(* Lemma state_direct_next: (* can be proved with the above, but assumed for simplicity *)
+    forall e1 e2:Event, 
+    direct_next e1 = Some e2 -> state_after_event e1 = state_before_event e2.
+Admitted. *)
 
 Lemma id_none_before_event_implies_id0:
     forall n:Node, forall i:nat, 
@@ -1420,6 +1557,67 @@ Lemma id_none_before_event_implies_id0:
     apply node_id_event_empty_i_implies_empty_i1 with (n:=n) . auto. rewrite <-Heqn0 in H. auto.
     rewrite <-Heqn0 in H0. contradiction. 
 Qed.
+
+Lemma state_after_equiv:
+    forall n:Node, forall i:nat, forall e: Event,
+        node_id_to_event n i = Some e ->
+        state_after_node_id n i = state_after_event e.
+        intros.
+        dependent induction i. (* event_i = Some e. In induction hypothesis, want event_i = Some e', not Some e *)
+        - rewrite node_id_to_event_def_id0 in H. apply  option_event_cannot_be_done_and_event in H. contradiction. auto. 
+        - destruct_with_eqn (node_id_to_event n i).
+                assert (state_after_node_id n i = state_after_event e0).
+                apply IHi with (e:=e0). auto.
+                destruct_with_eqn i. (* i should >=1*)
+                rewrite node_id_to_event_def_id0 in Heqo. 
+                    discriminate.
+                rewrite state_after_transition_def with (e:=e).
+                rewrite <- state_direct_pred_def with (e1:=e0) (e2:=e).
+                rewrite <- H0.
+                remember (S n0) as n1.
+                remember (state_after_node_id n n1) as state_n1.
+                simpl.
+                rewrite -> H.
+                unfold state_transition_op.
+                rewrite <- Heqstate_n1. 
+                trivial.
+
+                unfold direct_pred.
+                replace (event_to_seq_id e) with (S (S n0)).
+                assert (ev_node e = n).
+                apply node_id_to_event_def_node with (i:=(S( S(n0)))). auto.
+                rewrite -> H1.
+                auto.
+                rewrite -> node_id_to_event_def_id with (n:=n)(i:=S(S n0)). auto.
+                auto.
+                assert (i=0).
+                apply id_none_before_event_implies_id0 with (n:=n). auto. 
+                rewrite -> H.
+                discriminate.
+                rewrite H0.
+                unfold state_after_node_id.
+                rewrite H0 in H.
+                rewrite -> H.
+                unfold state_transition_op.
+                rewrite state_after_transition_def.
+                assert (state_before_event e = init_state n).
+                assert ( e = first_event n).
+                apply event_id_bijection with (e1:=e) (e2:=first_event n). 
+                rewrite -> event_id_init_first.
+                apply node_id_to_event_def_id with (n:=n)(i:=1). auto.
+                unfold first_event.
+                simpl.
+                apply node_id_to_event_def_node with (i:=1). auto.
+                rewrite -> H1.
+                apply state_before_first_event.
+                rewrite -> H1.
+                auto.
+Qed.
+
+Lemma state_before_equiv:
+    forall n:Node, forall i:nat, forall e: Event,
+        node_id_to_event n i = Some e ->
+        state_before_node_id n i = state_before_event e.
 
 
 Lemma state_node_id_transition:
@@ -1486,6 +1684,25 @@ Lemma synchrony_2:
     apply synchrony.
 Qed.
 
+(* Hypothesis event_triggered_by_msg_at_recv_time: 
+    forall e:Event, forall msg:MsgType,e.(ev_trigger) = Some (trigger_msg_receive msg) -> (msg_receive_time msg) = e.(ev_time).
+
+Lemma the_above_is_wrong: False.
+    remember (mkMsgType 0 0 (msg_blame (mkBlameType 0 0)) 0) as msg0.
+    remember (mkEvent 0 (Some (trigger_msg_receive msg0)) (2*delta+1)) as e0.
+    assert (msg_receive_time msg0 = 2*delta+1).
+    rewrite event_triggered_by_msg_at_recv_time with (e:=e0) (msg:=msg0).
+    rewrite Heqe0. auto. 
+    rewrite Heqe0. auto.
+    assert (msg_receive_time msg0 <= delta).
+    assert (msg_send_time msg0 = 0).
+    rewrite Heqmsg0. auto.
+    rewrite synchrony_2 with (msg:=msg0).
+    rewrite H0. lia.
+    rewrite H in H0.
+    lia.
+Qed. *)
+
 Hypothesis event_triggered_by_msg_at_recv_time:
     forall n:Node, forall i:nat, forall e:Event, forall msg:MsgType,
         node_id_to_event n i = Some e ->
@@ -1508,8 +1725,6 @@ Hypothesis event_triggered_by_timeout_of_itself:
     forall n:Node, forall i:nat, forall e:Event, forall  timeout t_node t_round t_expire_time,
         node_id_to_event n i = Some e ->
        e.(ev_trigger) = Some (trigger_timeout timeout t_node t_round t_expire_time) -> t_node = e.(ev_node).
-
-(* will add some hypothesis, saying that dishonest nodes cannot trigger something. *)
 
 (* An event generate some events in the future. If it is timeout type, the trigger is exactly generated. If it is sending a message, the message receive time might be delayed by at most delta after the sending time. *)
 
@@ -1606,7 +1821,6 @@ Definition triggers_generated_by_timout_def (e:Event) (timeout:TimeoutType) (nod
     end.
     
 
-
 (* the first event is the ancestor of all events. *)
     
 Definition triggers_of_first_event (n: Node) : list TriggerType :=
@@ -1615,15 +1829,13 @@ Definition triggers_of_first_event (n: Node) : list TriggerType :=
     else [(trigger_timeout timeout_proposal n 0 (2*delta))] ++ (broadcast_msgs_to_trigger_list 0 (msg_propose (mkProposalType 1 0 None 0)) 0).
 
 (* applies to only honest replicas *)
-Definition triggers_generation_def (n:Node) (i:nat): list TriggerType :=
+Definition triggers_generation_def (e:Event): list TriggerType :=
     (* first event is define else where *)
-    if i =? 0  then []
-    else if i =? 1 then triggers_of_first_event n
-    else match node_id_to_event n i with
-    | None => []
-    | Some e =>
-        let prev_state := state_after_node_id n (i-1) in
-        let new_state := state_after_node_id n i in
+    match direct_pred e with 
+    | None => triggers_of_first_event e.(ev_node) 
+    | Some e_pred =>
+        let prev_state := state_before_event e in
+        let new_state := state_after_event e in
         if prev_state.(st_committed) then []
         else match prev_state.(st_quit_round_time) with
         | Some quit_time => 
@@ -1667,75 +1879,53 @@ Definition triggers_generation_def (n:Node) (i:nat): list TriggerType :=
 (* maybe e1 e2 -> both generate trigger tri. *)
 
 (* trigger -> next_event, triggered by trigger | this acts as a hypothesis, saying that any trigger will generate an event *)
-(* Variable event_of_trigger: TriggerType -> . *)
+Variable event_of_trigger: TriggerType -> Event.
 
 (* as a hypothesis, that every trigger is generated by some event. *)
 (* trigger -> from_event *)
-(* Variable generators_of_triggers: TriggerType -> Event.  *)
+Variable generators_of_triggers: TriggerType -> Event. 
 
-Variable gen_id_of_event_at_node_id: Node -> nat -> nat. (* If there is no event -> map to 0*)
-Hypothesis gen_id_def_id0: 
-    forall n:Node, gen_id_of_event_at_node_id n 0 = 0.
-Hypothesis gen_id_def_none_to_0:
-    forall n:Node, forall i:nat, node_id_to_event n i = None -> gen_id_of_event_at_node_id n i = 0.
-Hypothesis gene_id_def_1_to_0:
-    forall n:Node, gen_id_of_event_at_node_id n 1 = 0. (* the first event does not have previous generator. *)
-Hypothesis gen_id_def_some_to_id:
-    forall n:Node, forall i:nat, 
-        i>=2 ->
-        gen_id_of_event_at_node_id n i < i /\ gen_id_of_event_at_node_id n i >= 1.
-
-(* when i = 0, node_id_event n i = None. 
-When i = 1, first_event.ev_trigger = None. *)
-Hypothesis gen_id_trigger_map:
-    forall n:Node, forall i:nat, forall e:Event, forall trigger:TriggerType, 
-        (*i>=2 ->*) node_id_to_event n i = Some e ->
-        e.(ev_trigger) = Some trigger -> In trigger (triggers_generation_def n (gen_id_of_event_at_node_id n i)).
-    
-
-    
+(* event_ancestor is naturally defined as first_event of event_node *)
 
 (* ================= PART 5 END ================== *)
 
 (* ################# PART 6 Properties - prepare for proof ################ *)
 
+Fixpoint is_nonrepeat (nodes: list Node): bool:=
+    match nodes with
+    | [] => true
+    | n::nodes' => if is_element n nodes' then false else is_nonrepeat nodes'
+    end.
+
+Fixpoint is_subset_replicas (nodes: list Node):bool:=
+    match nodes with
+    | [] => true
+    | n::nodes' => if is_element n replicas then is_subset_replicas nodes' else false
+    end.
+
+Definition is_nonrepeat_subset_replicas (nodes: list Node):bool:=
+    is_nonrepeat nodes && is_subset_replicas nodes.
 
 (* a quorum is a nonrepeat subset of replicas *)
 
-Lemma st_change_only_if_event_nonempty:
-    forall n:Node, forall i:nat, 
-        ~(state_after_node_id n (S i)) = (state_after_node_id n i) -> node_id_to_event n (S i) <> None.
-    intros.
-    destruct_with_eqn (node_id_to_event n (S i)).
-    discriminate.
-    rewrite state_after_node_id_one_level in H.
-    rewrite Heqo in H.
-    simpl in H.
-    contradiction.
-Qed.
+Definition is_quorum (nodes: list Node):bool:=
+    is_nonrepeat_subset_replicas nodes && ((1+n_faulty) <=? length nodes).
+
+(* a quorum is a nonrepeat subset of replicas *)
 
 Lemma st_change_committed_only_if_false_to_true:
-    forall n:Node, forall i:nat, 
-    let prev_state:=state_after_node_id n i in
-    let new_state:= state_after_node_id n (S i) in
+    forall e:Event, forall prev_state:StateType,
+    let new_state:=state_transition e prev_state in
     new_state.(st_committed) <> prev_state.(st_committed) ->
     prev_state.(st_committed) = false /\ new_state.(st_committed) = true.
     intros.
     destruct_with_eqn (st_committed prev_state).
     (* new state must be committed*)
     unfold new_state in H.
-    rewrite state_after_node_id_one_level in H.
-    destruct_with_eqn (node_id_to_event n (S i)).
-    unfold state_transition_op in H.
     unfold state_transition in H.
-    destruct_with_eqn (negb (st_node (state_after_node_id n i) =? ev_node e)).
-    unfold prev_state in Heqb. 
+    destruct_with_eqn (negb (st_node prev_state =? ev_node e)).
     contradiction.
-    unfold prev_state in Heqb.
     rewrite Heqb in H.
-    contradiction.
-    simpl in H.
-    unfold prev_state in Heqb.
     contradiction.
     split. auto.
     destruct_with_eqn (st_committed new_state).
@@ -1744,21 +1934,16 @@ Lemma st_change_committed_only_if_false_to_true:
 Qed.
 
 Lemma st_change_locked_highest_cert_only_if_status_timer:
-    forall n:Node, forall i:nat, forall e:Event,
-    let prev_state:= state_after_node_id n i in
-    let new_state:=state_after_node_id n (S i) in
+    forall e:Event, forall prev_state:StateType,
+    let new_state:=state_transition e prev_state in
     new_state.(st_locked_highest_cert) <> prev_state.(st_locked_highest_cert) ->
-    node_id_to_event n (S i) = Some e ->
     exists timeout t_node t_round t_expire_time, 
         ev_trigger e = Some (trigger_timeout timeout t_node t_round t_expire_time) /\
         timeout = timeout_quit_status /\
         t_round = prev_state.(st_round) /\
         t_expire_time = e.(ev_time).
     intros.
-    unfold new_state in H. 
-    rewrite state_after_node_id_one_level in H. rewrite H0 in H. simpl in H.
-    replace (state_after_node_id n i) with prev_state in H.
-
+    unfold new_state in H.
     unfold state_transition in H.
     destruct_with_eqn (negb (st_node prev_state =? ev_node e)).
     contradiction.
@@ -1766,172 +1951,27 @@ Lemma st_change_locked_highest_cert_only_if_status_timer:
     contradiction.
     destruct_with_eqn (st_quit_round_time prev_state).
     unfold state_transition_1_quit_round in H.
+    rewrite Heqo in H.
     destruct_with_eqn (ev_trigger e).
     destruct_with_eqn t.
     destruct_with_eqn (msg_content msg).
     contradiction.
-    assert ((state_transition_2_msg_E_vote e prev_state msg vote).(st_locked_highest_cert) = prev_state.(st_locked_highest_cert)).
+    assert ((state_transition_2_msg_E_vote e prev_state).(st_locked_highest_cert) = prev_state.(st_locked_highest_cert)).
     apply st_2E_only_change_all_certs_AND_dynamic_certs.
-    rewrite H1 in H. all:(try contradiction).
-    assert ((state_transition_2_msg_D_highest_cert e prev_state msg cert).(st_locked_highest_cert) = prev_state.(st_locked_highest_cert)).
-    apply st_2D_only_change_dynamic_cert.
-    rewrite H1 in H. all:(try contradiction).
+    rewrite H0 in H. all:(try contradiction).
+    assert ((state_transition_2_msg_D_highest_cert e prev_state).(st_locked_highest_cert) = prev_state.(st_locked_highest_cert)).
+    apply st_2D_only_change_all_cert_AND_dynamic_cert.
+    rewrite H0 in H. all:(try contradiction).
     destruct_with_eqn timeout. all:(try contradiction).
     destruct_with_eqn (round =? st_round prev_state).
     unfold state_set_enter_new_round in H.
     simpl in H. all:(try contradiction).
     repeat eexists. apply Nat.eqb_eq. repeat auto.   
-    assert (e.(ev_time) = expire_time).
-    apply event_triggered_by_timeout_at_expire_time with (n:=n) (i:=(S i)) (e:=e) (timeout:=timeout_quit_status) (t_node:=node) (t_round:=round) (t_expire_time:=expire_time). auto. auto. auto.
-    destruct_with_eqn (ev_trigger e).
-    destruct_with_eqn t.
-    assert ((state_transition_2_trigger_msg e prev_state msg).(st_locked_highest_cert) = prev_state.(st_locked_highest_cert)).
-    apply st_2_trigger_msg_only_change_msg_related. 
-    destruct_with_eqn (n_replicas<=?msg_sender msg).
-    all:(try contradiction).
-    destruct_with_eqn (negb (node =? st_node prev_state)).
-    unfold state_transition_3_trigger_timeout in H. contradiction.
-    unfold state_transition_3_trigger_timeout in H.
-    destruct_with_eqn timeout. all:(try contradiction). auto.
+    apply triggered_by_timeout_at_expire_time.
+
     
 Qed.
 
-
-(* use a simple version for all_certs and dynamic certs first | see what is required later. *)
-Lemma st_change_all_certs_only_if_recv_vote_or_proposal:
-    forall n:Node, forall i:nat, forall e:Event, 
-    let prev_state:= state_after_node_id n i in
-    let new_state:=state_after_node_id n (S i) in
-    new_state.(st_all_certs) <> prev_state.(st_all_certs) -> 
-    node_id_to_event n (S i) = Some e ->
-    exists msg, 
-        ev_trigger e = Some (trigger_msg_receive msg) /\
-
-        ((exists vote, msg.(msg_content) = msg_vote vote) \/
-        (exists proposal, msg.(msg_content) = msg_propose proposal)). (* /\
-        vote.(v_round) = prev_state.(st_round) /\
-        ~ In vote.(v_voter) (prev_state.(st_all_certs) vote.(v_round) vote.(v_block)).*)
-    intros.
-    unfold new_state in H.
-    assert (state_after_node_id n (S i) = state_transition e (state_after_node_id n i)). 
-    remember (state_after_node_id n i) as state1.
-    rewrite state_after_node_id_one_level.
-    rewrite H0.
-    simpl.
-    rewrite Heqstate1. auto.
-    rewrite H1 in H.
-    replace (state_after_node_id n i) with prev_state in H.
-    2:auto.
-    unfold state_transition in H.
-    destruct_with_eqn (negb (st_node prev_state =? ev_node e)).
-    contradiction.
-    destruct_with_eqn (st_committed prev_state). contradiction.
-    destruct_with_eqn (st_quit_round_time prev_state). 
-    unfold state_transition_1_quit_round in H. 
-    destruct_with_eqn (ev_trigger e).
-    destruct_with_eqn t.
-    destruct_with_eqn (msg_content msg).
-    contradiction.
-    (* unfold state_transition_2_msg_E_vote in H. 
-    rewrite Heqo0 in H. rewrite Heqm in H. 
-    destruct_with_eqn (v_round vote =? st_round prev_state).
-    unfold state_set_receive_vote in H.
-    simpl in H. unfold update_all_certs in H. *)
-    exists msg. split. auto. left. exists vote. auto.
-    all:(try contradiction).
-    assert (st_all_certs (state_transition_2_msg_D_highest_cert e prev_state msg cert) = prev_state.(st_all_certs)).
-    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. contradiction.
-    destruct_with_eqn timeout.
-    all:(try contradiction).
-    destruct_with_eqn (round =? st_round prev_state).
-    unfold state_set_enter_new_round in H. simpl in H. all:(try contradiction). 
-    destruct_with_eqn (ev_trigger e).
-    destruct_with_eqn t.
-    destruct_with_eqn (n_replicas<=?msg_sender msg).
-    all:(try contradiction).
-    unfold state_transition_2_trigger_msg in H.
-    destruct_with_eqn (msg_content msg).
-    exists msg. split. auto. right. exists proposal. auto. 
-    exists msg. split. auto. left. exists vote. auto. 
-    assert (st_all_certs (state_transition_2_msg_C_precommit e prev_state msg precommit) = st_all_certs prev_state).
-    apply st_2C_only_change_recvprecommits_and_commit. rewrite H2 in H. contradiction.
-    assert (st_all_certs (state_transition_2_msg_B_blame e prev_state msg blame) = st_all_certs prev_state).
-    apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. contradiction.
-    assert (st_all_certs (state_transition_2_msg_A_quit e prev_state msg qt) = st_all_certs prev_state).
-    apply st_2A_only_change_quit_time. rewrite H2 in H. contradiction.
-    assert (st_all_certs (state_transition_2_msg_D_highest_cert e prev_state msg cert) = st_all_certs prev_state).
-    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. contradiction.
-    destruct_with_eqn (node =? st_node prev_state).
-    simpl in H. 
-    assert (st_all_certs (state_transition_3_trigger_timeout e prev_state timeout node round expire_time) = st_all_certs prev_state).
-    apply st_3_only_change_new_view_timeouted. rewrite H2 in H. contradiction.
-    simpl in H. contradiction.
-Qed.
-
-Lemma st_change_dynamic_highest_cert_only_if_recv_vote_or_proposal_or_cert:
-    forall n:Node, forall i:nat, forall e:Event, 
-    let prev_state:= state_after_node_id n i in
-    let new_state:=state_after_node_id n (S i) in
-    new_state.(st_all_certs) <> prev_state.(st_all_certs) -> 
-    node_id_to_event n (S i) = Some e ->
-    exists msg, 
-        ev_trigger e = Some (trigger_msg_receive msg) /\
-
-        ((exists vote, msg.(msg_content) = msg_vote vote) \/
-        (exists proposal, msg.(msg_content) = msg_propose proposal) \/
-        (exists cert, msg.(msg_content) = msg_highest_cert cert)).
-
-    intros.
-    unfold new_state in H.
-    assert (state_after_node_id n (S i) = state_transition e (state_after_node_id n i)). 
-    remember (state_after_node_id n i) as state1.
-    rewrite state_after_node_id_one_level.
-    rewrite H0.
-    simpl.
-    rewrite Heqstate1. auto.
-    rewrite H1 in H.
-    replace (state_after_node_id n i) with prev_state in H.
-    2:auto.
-    unfold state_transition in H.
-    destruct_with_eqn (negb (st_node prev_state =? ev_node e)).
-    contradiction.
-    destruct_with_eqn (st_committed prev_state). contradiction.
-    destruct_with_eqn (st_quit_round_time prev_state). 
-    unfold state_transition_1_quit_round in H. 
-    destruct_with_eqn (ev_trigger e).
-    destruct_with_eqn t.
-    destruct_with_eqn (msg_content msg).
-    contradiction.
-    exists msg. split. auto. left. exists vote. auto.
-    all:(try contradiction).
-    assert (st_all_certs (state_transition_2_msg_D_highest_cert e prev_state msg cert) = prev_state.(st_all_certs)).
-    apply st_2D_only_change_dynamic_cert. rewrite H2 in H. contradiction.
-    destruct_with_eqn timeout.
-    all:(try contradiction).
-    destruct_with_eqn (round =? st_round prev_state).
-    unfold state_set_enter_new_round in H. simpl in H. all:(try contradiction). 
-    destruct_with_eqn (ev_trigger e).
-    destruct_with_eqn t.
-    destruct_with_eqn (n_replicas<=?msg_sender msg).
-    all:(try contradiction).
-    unfold state_transition_2_trigger_msg in H.
-    destruct_with_eqn (msg_content msg).
-    exists msg. split. auto. right. left. exists proposal. auto. 
-    exists msg. split. auto. left. exists vote. auto. 
-    assert (st_all_certs (state_transition_2_msg_C_precommit e prev_state msg precommit) = st_all_certs prev_state).
-    apply st_2C_only_change_recvprecommits_and_commit. rewrite H2 in H. contradiction.
-    assert (st_all_certs (state_transition_2_msg_B_blame e prev_state msg blame) = st_all_certs prev_state).
-    apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. contradiction.
-    assert (st_all_certs (state_transition_2_msg_A_quit e prev_state msg qt) = st_all_certs prev_state).
-    apply st_2A_only_change_quit_time. rewrite H2 in H. contradiction.
-    exists msg. split. auto. right. right. exists cert. auto. 
-    destruct_with_eqn (node =? st_node prev_state).
-    simpl in H. 
-    assert (st_all_certs (state_transition_3_trigger_timeout e prev_state timeout node round expire_time) = st_all_certs prev_state).
-    apply st_3_only_change_new_view_timeouted. rewrite H2 in H. contradiction.
-    simpl in H. contradiction.
-
-Qed.
 
 
 (* delayed because must prove that commit-false implies <=f precommits*)
