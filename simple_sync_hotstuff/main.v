@@ -7,6 +7,7 @@ Require Import Coq.Bool.Bool.
 Require Import Coq.Bool.BoolEq.
 Require Import Lia.
 Require Import Coq.Program.Equality.
+Require Import Coq.Arith.Compare_dec.
 Scheme Equality for list. 
 Import ListNotations.
 
@@ -35,6 +36,43 @@ Qed.
     intros. destruct (list_eq_dec A a b). left. apply e. right. apply n.
 Qed. *)
 
+Theorem leb_false: forall a b: nat, (a<=?b) = false -> a>b.
+intros.
+apply leb_iff_conv. auto.
+Qed.
+
+Definition is_element (a : nat) (b : list nat) : bool :=
+  existsb (fun x => Nat.eqb x a) b.
+
+
+Theorem is_element_true_prop: forall A b, is_element b A = true ->In b A.
+    intros.
+    induction A.
+    simpl in H. congruence.
+    simpl in H. simpl.
+    destruct_with_eqn (a=?b).
+    left. apply Nat.eqb_eq. auto. 
+    simpl in H. right. apply IHA. auto.
+
+Qed.
+Theorem is_element_false_prop: forall A:list nat,forall b:nat,
+    is_element b A = false -> ~ In b A.
+    intros.
+    induction A.
+    simpl. auto.
+    simpl in H.
+    simpl.
+    destruct_with_eqn (a=?b).
+    simpl in H. congruence.
+    assert ({a<b} + {a=b}+{b<a}).
+    apply lt_eq_lt_dec with (n:=a) (m:=b).
+    destruct H0. destruct s.
+    assert (~a=b).
+    
+    assert (~a=b).
+    apply Nat..
+Qed.
+
 Variable delta : nat. 
 
 Hypothesis delta_is_positive: delta >= 1.
@@ -45,9 +83,6 @@ Hypothesis delta_is_positive: delta >= 1.
 
 Definition Node: Type := nat. 
 Definition BlockType : Type := nat.
-
-Definition is_element (a : nat) (b : list nat) : bool :=
-  existsb (fun x => Nat.eqb x a) b.
 
 Variable isHonest: Node -> bool. 
 
@@ -662,7 +697,8 @@ Definition state_transition_2_msg_C_precommit (e:Event) (curr_state:StateType) (
         | None => curr_state 
         | Some valid_proposal =>
         if (valid_proposal.(p_block) =? precommit.(pc_block)) then 
-            let temp_state:= state_set_receive_precommit curr_state precommit in (* if curr_state has received f+1 precommits already, would have committed. will not enter this function*)
+            if (is_element precommit.(pc_voter) curr_state.(st_received_precommit_from)) then curr_state
+            else let temp_state:= state_set_receive_precommit curr_state precommit in (* if curr_state has received f+1 precommits already, would have committed. will not enter this function*)
             if (1+n_faulty) <=? (length temp_state.(st_received_precommit_from)) then
                 state_set_commit temp_state e.(ev_time)
             else temp_state
@@ -2096,7 +2132,13 @@ Lemma st_change_recv_pc_from_only_if_recv_precommit_or_timeout_status:
         t_expire_time = e.(ev_time)) \/
     (exists msg, 
         ev_trigger e = Some (trigger_msg_receive msg) /\
-        ((exists precommit, msg.(msg_content) = msg_precommit precommit)))).
+        ((exists precommit, msg.(msg_content) = msg_precommit precommit /\ 
+        precommit.(pc_voter)<n_replicas /\
+        ~In precommit.(pc_voter) prev_state.(st_received_precommit_from) /\
+        In precommit.(pc_voter) new_state.(st_received_precommit_from) /\ 
+        precommit.(pc_round) = prev_state.(st_round) /\
+        (exists valid_proposal, prev_state.(st_first_valid_proposal)=Some valid_proposal /\
+            precommit.(pc_block) = valid_proposal.(p_block)) )))).
     intros.
     unfold new_state in H.
     assert (state_after_node_id n (S i) = state_transition e (state_after_node_id n i)). 
@@ -2145,7 +2187,21 @@ Lemma st_change_recv_pc_from_only_if_recv_precommit_or_timeout_status:
     apply st_2F_only_change_proposal_related. rewrite H2 in H. clear H2. contradiction.
     assert (st_received_precommit_from (state_transition_2_msg_E_vote e prev_state msg vote) = st_received_precommit_from prev_state).
     apply st_2E_only_change_all_certs_AND_dynamic_certs. rewrite H2 in H. clear H2. contradiction.
-    right. exists msg. split. auto. exists precommit. auto. 
+
+    (* the important type: precommit - unfold precommit to get more information*)
+    unfold state_transition_2_msg_C_precommit in H.
+    destruct_with_eqn (n_replicas <=? pc_voter precommit). congruence.
+    destruct_with_eqn (pc_round precommit =? st_round prev_state).
+    destruct_with_eqn (st_first_valid_proposal prev_state).
+    destruct_with_eqn (p_block p =? pc_block precommit).
+    destruct_with_eqn (is_element (pc_voter precommit) (st_received_precommit_from prev_state)). congruence.
+    destruct_with_eqn (1+n_faulty <=? length (st_received_precommit_from (state_set_receive_precommit prev_state precommit))).
+    unfold state_set_receive_precommit in H.
+    rewrite Heqb5 in H.
+    unfold state_set_commit in H. simpl in H. 
+    right. exists msg. split. auto. exists precommit. split. auto. split. 
+    apply leb_false. auto.
+    split. 
     assert (st_received_precommit_from (state_transition_2_msg_B_blame e prev_state msg blame) = st_received_precommit_from prev_state).
     apply st_2B_only_change_recvblames_and_quit_time. rewrite H2 in H. clear H2. contradiction.
 

@@ -5,6 +5,7 @@ Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Bool.Bool.
 Require Import Coq.Arith.Arith.
 Require Import Lia.
+Require Import Coq.Arith.Compare_dec.
 Import ListNotations.
 
 Section AMod.
@@ -48,8 +49,24 @@ Theorem check:
         n = n+1) -> False.
     intros.
     destruct H.
+    induction x.
+    lia.
+    lia.
 Qed.
 (* extract hint *)
+
+
+
+Theorem leb_false: forall a b: nat, (a<=?b) = false -> a>b.
+intros.
+assert ({a<=b} + {a>b}).
+apply le_gt_dec with (n:=a) (m:=b).
+destruct H0.
+assert (a<=?b = true).
+apply Nat.leb_le. auto.
+congruence.
+auto.
+Qed.
 
 
 End AMod.
