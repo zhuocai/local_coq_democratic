@@ -172,6 +172,14 @@ Fixpoint is_subset_replicas (nodes: list Node):bool:=
     | n::nodes' => if is_element n replicas then is_subset_replicas nodes' else false
     end.
 
+Fixpoint is_subset (list1: list Node) (list2: list Node): bool:=
+    match list1 with
+    | [] => true
+    | n::list1' => if is_element n list2 then is_subset list1' list2 else false
+    end.
+
+(* a nonrepeat subset of replicas *)
+
 Definition is_nonrepeat_subset_replicas (nodes: list Node):bool:=
     is_nonrepeat nodes && is_subset_replicas nodes.
 
@@ -213,6 +221,16 @@ Lemma dishonest_replicas_length: length dishonest_replicas <= n_faulty.
     lia.
 Qed.
 
+Lemam
+
+Lemma filter_sublist:
+    forall list1 list2: list Node, 
+        is_nonrepeat list1 = true ->
+        is_nonrepeat list2 = true ->
+        is_subset list1 list2 = true ->
+        list1 = filter (fun n => is_element n list1) list2.
+Qed.
+
 (* idea of induction: 
 the list is non-repeat subset. 
 if induction on list. 
@@ -221,7 +239,7 @@ otherwise, the remaining is a non-repeat subset of length - 1.
 *)
 
 Lemma list_is_quorum_then_exists_honest_node:
-    forall l: list Node, is_quorum l = true -> exists n:Node,  In n l /\ isHonest n = true.
+    forall l: list Node, is_quorum l = true -> length (filter isHonest l) >=1.
     intros.
     unfold is_quorum in H.
     destruct_with_eqn (is_nonrepeat_subset_replicas l).
@@ -231,7 +249,13 @@ Lemma list_is_quorum_then_exists_honest_node:
     2:{simpl in H. congruence. }
     clear H.
     unfold is_nonrepeat_subset_replicas in Heqb.
-    rewrite Nat.leb_le in Heqb0.
+    rewrite Nat.leb_le in Heqb0. 
+    
+    (*step 1: *)
+    assert (l = filter (fun n => is_element n l) replicas).
+
+
+    assert (length(filter (fun n => negb (isHonest n)) l) <= length (filter (fun n => negb (isHonest n)) replicas)).
 
     generalize Heqb. generalize Heqb0. 
     remember (length l) as len_l. 
