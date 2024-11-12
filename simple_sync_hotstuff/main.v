@@ -180,6 +180,66 @@ Definition is_nonrepeat_subset_replicas (nodes: list Node):bool:=
 Definition is_quorum (nodes: list Node):bool:=
     is_nonrepeat_subset_replicas nodes && ((1+n_faulty) <=? length nodes).
 
+Definition honest_replicas : list Node := filter isHonest replicas.
+Definition dishonest_replicas : list Node := filter (fun n => negb (isHonest n)) replicas.
+
+Lemma honest_replicas_length: length honest_replicas >= 1+n_faulty.
+    unfold honest_replicas.
+    auto.
+Qed.
+
+(* induction on both length and start *)
+(* Lemma filter_length_my: 
+    forall n start len:nat, forall filter_cond: Node -> bool, 
+    let l := List.seq start len in
+    let neg_filter_cond:= fun n => negb (filter_cond n) in
+    n <= len ->
+    length (filter filter_cond l) >= n -> 
+    length (filter neg_filter_cond l) <= len-n. 
+    intros.
+    generalize dependent len.
+Qed.  *)
+
+
+Lemma dishonest_replicas_length: length dishonest_replicas <= n_faulty.
+    assert (length (honest_replicas) + length (dishonest_replicas) = length replicas).
+    unfold honest_replicas. unfold dishonest_replicas.
+    apply filter_length.
+    unfold replicas in H. rewrite length_seq in H.
+    unfold n_replicas in H. 
+    fold honest_replicas in honest_majority. 
+    remember (length honest_replicas) as l1.
+    remember (length dishonest_replicas) as l2.
+    lia.
+Qed.
+
+(* idea of induction: 
+the list is non-repeat subset. 
+if induction on list. 
+if the first element is honest, ok. 
+otherwise, the remaining is a non-repeat subset of length - 1.
+*)
+
+Lemma list_is_quorum_then_exists_honest_node:
+    forall l: list Node, is_quorum l = true -> exists n:Node,  In n l /\ isHonest n = true.
+    intros.
+    unfold is_quorum in H.
+    destruct_with_eqn (is_nonrepeat_subset_replicas l).
+    destruct_with_eqn ((1+n_faulty) <=? length l).
+    (* this is the case *)
+    2:{simpl in H. congruence. }
+    2:{simpl in H. congruence. }
+    clear H.
+    unfold is_nonrepeat_subset_replicas in Heqb.
+    rewrite Nat.leb_le in Heqb0.
+
+    generalize Heqb. generalize Heqb0. 
+    remember (length l) as len_l. 
+    dependent induction len_l.
+
+
+Qed. 
+
 
 Record Certificate: Type := mkCertificate {
   c_block : BlockType;
@@ -2714,8 +2774,6 @@ Lemma turn_committed_implies_enough_precommits_and_a_valid_proposal:
     destruct H5. split. auto. exists x. auto.
 Qed.
 
-
-
 Lemma is_committed_then_enough_precommits_and_a_valid_proposal:
     forall n: Node, forall i: nat, 
         st_committed (state_after_node_id n i) = true ->
@@ -2737,13 +2795,53 @@ Lemma is_committed_then_enough_precommits_and_a_valid_proposal:
     assert (exists valid_p, st_first_valid_proposal  (state_after_node_id n i) = Some valid_p).
     apply turn_committed_implies_enough_precommits_and_a_valid_proposal with (n:=n) (i:=i). auto. auto.
     destruct H0.
-    exists x. auto. auto. 
+    (*must prove that in this step, the valid proposal field is not changed*)
 
+    destruct_with_eqn (st_first_valid_proposal (state_after_node_id n (S i))).
+    exists p. auto.
+    assert (st_first_valid_proposal (state_after_node_id n (S i)) <> st_first_valid_proposal (state_after_node_id n i)).
+    rewrite H0. rewrite Heqo. congruence.
+
+    destruct_with_eqn (node_id_to_event n (S i)).
+
+    assert ( (exists e msg precommit,
+        node_id_to_event n (S i) = Some e /\
+        (state_after_node_id n i).(st_quit_round_time) = None /\ 
+        ev_trigger e = Some (trigger_msg_receive msg) /\
+        msg.(msg_content) = msg_precommit precommit /\
+        ~ In precommit.(pc_voter) (state_after_node_id n i).(st_received_precommit_from) /\
+        precommit.(pc_round) = (state_after_node_id n i).(st_round))).
+    apply st_change_committed_only_if_recv_precommit with (n:=n) (i:=i). auto. auto. rewrite H. rewrite Heqb. congruence.
+    destruct H2. destruct H2. destruct H2. destruct H2. destruct H3. destruct H4. destruct H5. clear H6.
+
+    assert ((exists t_node t_round t_expire_time, 
+        ev_trigger e = Some (trigger_timeout timeout_quit_status t_node t_round t_expire_time) /\
+        t_round = (state_after_node_id n i).(st_round) /\
+        t_expire_time = e.(ev_time)) \/
+    (exists msg, 
+        ev_trigger e = Some (trigger_msg_receive msg) /\
+        ((exists vote, msg.(msg_content) = msg_vote vote) \/
+        (exists proposal, msg.(msg_content) = msg_propose proposal)))).
+
+    apply st_change_proposal_related_only_if_recv_proposal_or_vote_or_timeout_status with (n:=n) (i:=i). auto. auto.
+    destruct H6. destruct H6. destruct H6. destruct H6. destruct H6.
+    rewrite H2 in Heqo0. inversion Heqo0. 
+    rewrite  H9 in H4. congruence.
+    
+    destruct H6. destruct H6. destruct H7. destruct H7. 
+    rewrite H2 in Heqo0. inversion Heqo0. rewrite H9 in H4. rewrite H6 in H4. inversion H4. rewrite H10 in H7. congruence. 
+    
+    destruct H7.  rewrite H2 in Heqo0. inversion Heqo0. rewrite H9 in H4. rewrite H6 in H4. inversion H4. rewrite H10 in H7. congruence.
+
+    rewrite state_after_node_id_one_level in H1. 
+    rewrite Heqo0 in H1. simpl in H1. congruence.
 Qed.
 
+(* update cert: 1 - receive vote. this changes all_certs, and further dynamic cert. 
+2 - receive highest cert, only applies to leader, at the beginning of new round. *)
 
-
-
+(* at the current round, only vote is affecting all_certs *)
+(* if anyone commit, it means receiving f+1 precommit. At least 1 precommits from honest. *)
 Theorem lemma_61_part1:
     forall n:Node, forall i:nat, 
     let prev_state:= state_before_node_id n i in 
@@ -2754,6 +2852,7 @@ Theorem lemma_61_part1:
     (let round:= (new_state).(st_round) in
     (forall n2: Node, forall i2: nat, forall block:BlockType,
         let state2:= state_after_node_id n2 i2 in 
+        n2 < n_replicas -> 
         state2.(st_round) = round -> 
         is_quorum (state2.(st_all_certs) round block) = true -> block = valid_proposal.(p_block)
         ))).
@@ -2761,6 +2860,12 @@ Theorem lemma_61_part1:
     intros.
 
     (*existence of valid_proposal by *)
+    assert (is_quorum (state_after_node_id n i).(st_received_precommit_from) = true /\ 
+        (exists valid_proposal, st_first_valid_proposal  (state_after_node_id n i) = Some valid_proposal)).
+    apply is_committed_then_enough_precommits_and_a_valid_proposal with (n:=n) (i:=i). auto.
+
+    destruct H1. destruct H2. 
+    exists x. split. auto.  (* if there is ever a cert in round -> receive the cert in *)
 
     Admitted. 
 
