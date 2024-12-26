@@ -1,3 +1,0 @@
--R . myTest
-./test_module.v
-./test_main.v
