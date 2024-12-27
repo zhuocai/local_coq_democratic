@@ -119,7 +119,7 @@ Variable block2hash: BlockType->nat. (* *)
 
 Variable confirmed_blocks: node->slot->BlockType. 
 
-Variable committees: blockType->slot->set node. 
+Variable committees: blockType->slot->set node. (* the block of slot s-1, determines the committee of slot s. *)
 (* ##### Part 2 ends *)
 
 (* ##### Part 3: States and state transition rules *)
