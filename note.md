@@ -25,3 +25,47 @@ However, our protocol reaches consensus for each slot within the slot. Therefore
 2. authentication
 
 Every message received by an honest node must be authenticated: sent by the sender before. 
+
+3. Backward engineering. 
+Firstly write the big results, define necessary objects. However, for these types, don't have to be complete right now. For example, message types might not contain all types that are finally required. 
+
+4. liveness
+Argue that the chain is infinite. Also set state_after_node_id return type to be State instead of option State. 
+
+
+## Details
+
+### outside sync hotstuff
+#### message types
+directly add an hypothesis 
+
+
+#### blockhash
+
+The blockhash depends on the following fields: 
+* prevhash: defined recursively. 
+* block proposer: node. 
+* block value: nat. 
+* block slot: nat. 
+* vote weight (actually with its proof). 
+Note that the proof of consensus (CertProof, a list of certify messages by committee) is not included in the computation of hash. Reason: different nodes might receive different set of certify messages and proceed. If they include the set of certify messages in the computation of hash, then they the same block content might have multiple different hash values, making it hard to refer by hash values in the future. 
+
+#### State
+State machine rules:
+
+keep record of the following: 
+- current slot. 
+- confirmed blocks. (once confirmed, never reverted. )
+  
+From the above framework, we can define a variable, that is the committee of each slot, in the eye of a node. 
+
+Define a full mapping: node->slot->FullBlockType? (does not assume that every block derived from teh mapping, is a valid block. )
+
+Or use a optional mapping: node->slot->optional FullBlockType. 
+
+comparison: disadvantages of full mapping: (1) already assuming that there is a confirmed block in every slot for every node, OR FullBlockType might be valid or not. 
+
+#### definition of state
+
+## work record
+There are two ultimate goals: proving safety and proving liveness. If I only consider proving safety first, I might end up with writing a lot of code, but missing the necessary details for proving livess. 
