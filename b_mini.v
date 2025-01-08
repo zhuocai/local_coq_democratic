@@ -15,7 +15,7 @@ Require Import Coq.Lists.ListSet. (* data structure of finite sets*)
 Scheme Equality for list. 
 Import ListNotations.
 
-Section RealDemocratic. 
+Section BugMini. 
 
 (* ##### Part 1: Useful Lemmas *)
 
@@ -25,23 +25,14 @@ Section RealDemocratic.
 
 Definition node:=nat.
 Definition slot:=nat.
-Variable nodes: set node. 
-Definition n_nodes: nat:= length nodes.
 Variable n_faulty:nat.
 Definition n_committee: nat:= 2*n_faulty + 1.
 Variable local_committees: node->slot->set node. 
 Variable is_honest_bool: node->bool.
 Definition is_honest (n:node):Prop
     := is_honest_bool n = true.
-
-
-
 Hypothesis committee_size: forall s:slot, forall n:node, 
     length (local_committees n s) = n_committee.
-
-Hypothesis committee_in_nodes: forall s:slot, forall n:node, 
-    incl (local_committees n s) nodes.
-
 Definition is_committee_maj_honest (nodes: set node): Prop:=
     let honest_nodes:= filter is_honest_bool nodes in
     2*(length honest_nodes) > length nodes.
@@ -51,11 +42,6 @@ Definition node_eq_dec := Nat.eq_dec.
 
 Definition in_committee_for (n:node) (s:slot) (view: node): bool:=
     set_mem node_eq_dec n (local_committees view s).
-
-Definition is_honest_node (n:node):Prop:=
-    is_honest n /\ set_mem node_eq_dec n nodes = true.
-Definition is_honest_node_bool (n:node):bool:=
-    is_honest_bool n && set_mem node_eq_dec n nodes. 
 
 Variable delta: nat. (* the communication delay *)
 Variable interact_duration: nat. (* the time for proposal-voting-aggregation step *)
@@ -169,12 +155,17 @@ Hypothesis aggprev_hash:
     fullblock2hash (agg_prevblock ap) = ap.(ap_proposal).(pr_prevhash).
     
 
+Variable confirmed_blocks: node->slot->option FullBlockType. 
 
-Definition is_fullblock_valid (block: FullBlockType): Prop:=
-    True. (* left as TODO *)
+Variable is_fullblock_valid: FullBlockType->Prop.
 
-Definition block_equal (b1 b2: FullBlockType): Prop:=
-    True. (* left as TODO *) 
+(* Definition is_fullblock_valid (block: FullBlockType): Prop:=
+    True.  *)
+
+Variable block_equal: FullBlockType->FullBlockType->Prop.
+
+(* Definition block_equal (b1 b2: FullBlockType): Prop:=
+    True. *)
 
 (* ##### Part 2 ends *)
 
@@ -227,24 +218,6 @@ Fixpoint state_after_node_id (n:node) (i:nat): State:=
     end.
 
 
-
-Variable confirmed_blocks: node->slot->option FullBlockType. 
-
-Variable confirm_time: node->slot->nat. (* should also be option type? no. Valid only if confirmed_blocks n s is not None *)
- 
-Variable enter_slot_seqid: node->slot->nat. 
-Definition enter_slot_time (n:node) (s:slot):=
-    match node_id_to_event n (enter_slot_seqid n s) with 
-    | None => 0
-    | Some ev => ev.(ev_time)
-    end. 
-Variable confirm_slot_seqid: node->slot->nat. 
-Definition confirm_slot_time (n:node) (s:slot):=
-    match node_id_to_event n (enter_slot_seqid n s) with
-    | None => 0
-    | Some ev => ev.(ev_time)
-    end. 
-
 (* ##### Part 4 ends *)
 
 (* ##### Part 5: Triggers | many assumptions are here *)
@@ -252,7 +225,7 @@ Definition confirm_slot_time (n:node) (s:slot):=
 (* assumption - honest committee members receive the largest honest winner block on time. *)
 
 Hypothesis honest_majority: forall s:slot, forall n:node, 
-    is_honest_node n -> is_committee_maj_honest (local_committees n s).
+    is_honest n -> is_committee_maj_honest (local_committees n s).
 
 Hypothesis confirmed_block_none_keeps_none: forall s:slot, forall n:node, 
     confirmed_blocks n s = None -> confirmed_blocks n (S s) = None.
@@ -264,97 +237,23 @@ Lemma confirmed_block_some_implies_some: forall s:slot, forall n:node, forall bl
     exists f. auto.
     apply confirmed_block_none_keeps_none in Heqo. congruence.
 Qed.
-
-Hypothesis confirm_slot_sync: (* enter slot is defined as 1 unit of time after confirmation. Using a timeout. Just define a variable similar to the local chain.  *)
-    forall s:slot, forall n1 n2:node, 
-        confirm_slot_time n1 s <= (confirm_slot_time n2 s) + delta. 
-(* Don't need enter slot time anymore. *)
-
-Hypothesis receive 
-
 (* ##### Part 5 ends *)
 
-(* ##### Part 6: Intermediate Lemmas *)
 
 
-Lemma once_commit_all_commit:
-    forall s:slot, forall n1 n2:node, forall block: FullBlockType, 
-    is_honest_node n1 -> is_honest_node n2 ->
-    confirmed_blocks n1 s = Some block ->
-    confirmed_blocks n2 s = Some block /\ confirm_time n2 s <= confirm_time n1 s + delta. 
-Admitted. (* todo, how to define confirm. How does the communication work. *)
-
-(* here not mentioning the time *)
-
-(* ##### Part 6 ends *)
-
-
-(* buffer: to move earlier *)
-
-(* ##### Part 7: Big Lemmas *)
-
-Hypothesis committee_determined_by_prevblocks:
-    forall s:slot, forall n1 n2:node, forall block1 block2: FullBlockType,
-    is_honest_node n1 -> is_honest_node n2 ->
-    confirmed_blocks n1 s = Some block1 -> 
-    confirmed_blocks n2 s = Some block2 ->
-    block_equal block1 block2 ->
-    local_committees n1 s = local_committees n2 s.
 
 Lemma safety_slot_induction_s0:
     forall n1 n2: node, forall block1 block2: FullBlockType,
-    is_honest_node n1 -> is_honest_node n2 ->
+    is_honest n1 -> is_honest n2 ->
     confirmed_blocks n1 0 = Some block1 ->
     confirmed_blocks n2 0 = Some block2 ->
     block_equal block1 block2.
 Admitted.
 
-Lemma safety_slot_induction_s1: (* actually requiring that everyone reaches consensus on the block of *)
-    forall s:slot, forall n1 n2: node, forall block1 block2: FullBlockType, forall block1' block2': FullBlockType,
-    is_honest_node n1 -> is_honest_node n2 ->
-    confirmed_blocks n1 s = Some block1 -> 
-    confirmed_blocks n2 s = Some block2 ->
-    block_equal block1 block2 -> (* the above is the condition that previous block are the same. *)
-    in_committee_for n1 (S s) n1 = true -> 
-    in_committee_for n2 (S s) n2 = true -> 
-    confirmed_blocks n1 (S s) = Some block1' -> 
-    confirmed_blocks n2 (S s) = Some block2' ->
-    block_equal block1' block2'.
-Admitted. 
-
-Lemma liveness_slot_induction_s0:
-    forall n:node, 
-    is_honest_node n -> 
-    exists i: nat, 
-    let state_i:= state_after_node_id n i in
-    state_i.(st_slot) = 0 /\
-    (exists block: FullBlockType,
-    state_i.(st_committed_block) = Some block).
-Admitted.
-
-Lemma liveness_slot_induction_s1:
-    forall s:slot, forall n:node, forall i:nat, 
-    is_honest_node n ->(
-    let state_i:= state_after_node_id n i in
-    state_i.(st_slot) = s /\
-    exists block: FullBlockType,
-    state_i.(st_committed_block) = Some block) -> 
-    exists i1:nat,
-    let state_i1:= state_after_node_id n i1 in
-    state_i1.(st_slot) = S s /\
-    exists block': FullBlockType,
-    state_i1.(st_committed_block) = Some block'.
-Admitted.
-
-
-
-    
-
-
 (* safety theorem: *)
 Theorem safety: 
     forall s:slot, forall n1 n2:node, forall block1 block2: FullBlockType,
-    is_honest_node n1 -> is_honest_node n2 ->
+    is_honest n1 -> is_honest n2 ->
     confirmed_blocks n1 s = Some block1 ->
     confirmed_blocks n2 s = Some block2 ->
     block_equal block1 block2.
@@ -371,27 +270,10 @@ Theorem safety:
     apply confirmed_block_some_implies_some in H5.
     destruct H4. destruct H5.
     assert (block_equal x x0).
-    apply IHs with (block1:=x) (block2:=x0). auto. auto.
-    (* *)
-    apply safety_slot_induction_s1 with (n1:=n1) (n2:=n2) (block1:=x) (block2:=x0) (block1':=block3) (block2':=block4) (s:=s). auto. auto. auto. auto. auto. auto. auto. auto. 
+    apply IHs with (block1:=x) (block2:=x0). auto. auto. 
+    apply 
+
+
 Qed.
 
-
-(* liveness theorem: *)
-Theorem liveness:
-    forall s:slot, forall n:node, 
-    is_honest_node n -> 
-        exists i:nat, let 
-            state_i:= state_after_node_id n i in
-            state_i.(st_slot) = s /\ 
-            exists block: FullBlockType, 
-            state_i.(st_committed_block) = Some block.
-    intros.
-    induction s.
-    apply liveness_slot_induction_s0. auto.
-    destruct IHs.
-    apply liveness_slot_induction_s1 with (i:=x). auto. auto.
-Qed. 
-(* ##### Part 7 ends*)
-
-End RealDemocratic.
+End BugMini.

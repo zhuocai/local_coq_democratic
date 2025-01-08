@@ -51,12 +51,17 @@ The blockhash depends on the following fields:
 Note that the proof of consensus (CertProof, a list of certify messages by committee) is not included in the computation of hash. Reason: different nodes might receive different set of certify messages and proceed. If they include the set of certify messages in the computation of hash, then they the same block content might have multiple different hash values, making it hard to refer by hash values in the future. 
 
 #### State
+States: the blockchain system is a state machine system. Every node maintains its local states, and reaches consensus on the block contents. 
+
+Committee members are determined by previous blocks, are part of the blockchain state, might be different for different nodes. Proving that they are the same for every node is a result of proving that they confirm the same block in every slot. 
+
 State machine rules:
 
 keep record of the following: 
 - current slot. 
 - confirmed blocks. (once confirmed, never reverted. )
   
+
 From the above framework, we can define a variable, that is the committee of each slot, in the eye of a node. 
 
 Define a full mapping: node->slot->FullBlockType? (does not assume that every block derived from teh mapping, is a valid block. )
@@ -65,7 +70,54 @@ Or use a optional mapping: node->slot->optional FullBlockType.
 
 comparison: disadvantages of full mapping: (1) already assuming that there is a confirmed block in every slot for every node, OR FullBlockType might be valid or not. 
 
+My decision: use optional. Otherwise, I might forgot to apply the condition that the block should be valid. 
+
+
+
 #### definition of state
+
+When receiving enough votes to confirm, the state does not go to the next slot immediately. Instead, it waits until receiving the aggregated proposal. This is to ensure that there exists a time, that the state confirms a block in a given slot. 
+
+
+
+#### nodes
+
+note that, the set of nodes must be bounded. Otherwise, a node might receive infinite incoming messages in one slot, thus not able to prove liveness. Will add a hypothesis, saying that each node at most receives a bounded amount of messsages from boundedly many nodes in every slot. Thus can show liveness with concrete time bounds. 
+
+
+
+#### new slot
+
+when confirmed, stay in slot, set a timer of 1 unit, enter new slot. Using this to manually make sure that, after the event that makes the node confirm, the state remains in the current slot and committed. 
 
 ## work record
 There are two ultimate goals: proving safety and proving liveness. If I only consider proving safety first, I might end up with writing a lot of code, but missing the necessary details for proving livess. 
+
+
+
+#### how to prove safety
+
+turns out that the safety proof is a bit more complicated. 
+
+Forwaring confirmation quorom, only implies that if h1 commits block B1, then delta later, any other honest node must commit. However, other honest nodes might commit other blocks. 
+
+Stating that other honest nodes also commit the same block, is the safety theorem itself. Therefore, introducing extra lemmas do not help. 
+
+Therefore, must develop the state transition and triggers now. BUT don't forget backward engineering. How does the safety lemma breaks apart? 
+
+## coq notes
+
+How to use a lemma that states exists something.  How to make it explicit. 
+
+example: exists e, var = some e. 
+
+How to replace var with some e. 
+
+directly use destruct. 
+
+
+
+
+
+## Bug?
+
