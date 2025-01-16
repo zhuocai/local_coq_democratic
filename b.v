@@ -415,6 +415,7 @@ Hypothesis committee_same_s0:
     is_honest_node n1 -> is_honest_node n2 ->
     local_committees n1 0 = local_committees n2 0.
 
+(* a leader proposal's witness (f+1 ack) is known by node for slot and round *)
 Variable lp_in_ackproof_node_slot_round: LeaderProposalType->node->slot->nat->Prop.
 
 
@@ -451,14 +452,23 @@ Lemma block_implies_committee_same_s1:
 Qed.
 
 
-Lemma block_implies_committee_pair_equal_s1:
+Lemma block_implies_committee_pair_equal:
     forall s:slot, 
-    confirm_same_block_pred s ->
+    (s = 0 \/ confirm_same_block_pred (s-1)) ->
     forall n1 n2:node,
     is_honest_node n1 -> is_honest_node n2 ->
     local_committees n1 s = local_committees n2 s.
 
 Admitted.
+
+Lemma block_implies_committee_view_pair_equal:
+    forall s:slot, 
+    (s = 0 \/ confirm_same_block_pred (s-1)) ->
+    forall com n1 n2:node,
+    is_honest_node n1 -> is_honest_node n2 ->
+    in_committee_for com s n1 -> in_committee_for com s n2.
+Admitted.
+
 
 (* same slot, same round implication. *)
 Lemma honest_cert_implies_honest_ack:
@@ -468,7 +478,7 @@ Lemma honest_cert_implies_honest_ack:
     forall n:node, is_honest_node n ->
     in_committee_for n s n ->
     certified_blocks n s r = Some lp ->
-    (exists n':node, is_honest_node n' -> in_committee_for n' s n' -> acknowledged_blocks n' s r = Some lp).
+   acknowledged_blocks n s r = Some lp.
 
 Admitted. 
 
@@ -539,8 +549,32 @@ Lemma safety_per_slot_helper:
     simpl in H8_3.
 
     remember (lp2.(lp_round)-lp1.(lp_round)) as r_gap.
+    assert (lp2.(lp_round) = lp1.(lp_round) + r_gap) by lia.
+
+
+    assert (in_committee_for com_node s com_node).
+    apply block_implies_committee_view_pair_equal with (s:=s) (com:=com_node) (n1:=n1)(n2:=com_node). auto. auto. auto. auto. 
+
+    assert (in_committee_for com_node2 s com_node2).
+    apply block_implies_committee_view_pair_equal with (s:=s) (com:=com_node2) (n1:=n2)(n2:=com_node2). auto. auto. auto. auto.
+
+    (* com_node1/2 certs => also acked. *)
+
+    assert(acknowledged_blocks com_node s lp1.(lp_round) = Some lp1).
+    apply honest_cert_implies_honest_ack with (s:=s) (r:=lp1.(lp_round)) (lp:=lp1). auto. auto. auto. auto.
+
+    assert(acknowledged_blocks com_node2 s lp2.(lp_round) = Some lp2).
+    apply honest_cert_implies_honest_ack with (s:=s) (r:=lp2.(lp_round)) (lp:=lp2). auto. auto. auto. auto.
+
+
+    specialize (H7_1 com_node H5_1 H8).
+    specialize (H7_2 com_node H8_1 H9).
+
+    pose proof H as H'.
     induction r_gap.
     (* in the same slot, no-one certifies a different block *)
+    
+    
 
 
 
@@ -549,7 +583,10 @@ Lemma safety_per_slot_helper:
 
 
 
-Admitted.
+
+
+
+Qed.
 
 Lemma safety_per_slot:
     forall s:slot, 
