@@ -416,7 +416,7 @@ Hypothesis committee_same_s0:
     local_committees n1 0 = local_committees n2 0.
 
 (* a leader proposal's witness (f+1 ack) is known by node for slot and round *)
-Variable lp_in_ackproof_node_slot_round: LeaderProposalType->node->slot->nat->Prop.
+Variable lp_in_ackproof_node_slot_round: LeaderProposalType->node->slot->nat->Prop. (* form at the end of the round. *)
 
 
 Lemma block_implies_committee_same_s1:
@@ -494,7 +494,7 @@ Lemma important_lemma:
     lp_in_ackproof_node_slot_round lp n' s lp.(lp_round)) /\ (* part 1: every other has ackproof *)
     (forall n'':node, is_honest_node n''->
     in_committee_for n'' s n'' ->
-    exists lp':LeaderProposalType, acknowledged_blocks n'' s lp.(lp_round) = Some lp'-> lp' = lp).
+    forall lp':LeaderProposalType, acknowledged_blocks n'' s lp.(lp_round) = Some lp'-> lp' = lp).
 Admitted.
 
 Lemma comH_ackproofed_implies_no_conflict_honest_ack:
@@ -505,6 +505,21 @@ Lemma comH_ackproofed_implies_no_conflict_honest_ack:
     in_committee_for n s n ->
     lp_in_ackproof_node_slot_round lp n s r) ->
     (forall r':nat, forall n':node, forall lp':LeaderProposalType, is_honest_node n' -> r<=r'  -> acknowledged_blocks n' s r' = Some lp'-> lp'.(lp_ap) = lp.(lp_ap)).
+Admitted.
+
+(* if an honest node certifies a lp in round r, then in future rounds, no honest nodes ack different ap.  *)
+(* inference chain: (1) all locks on *)
+Lemma important_lemma_across_rounds:
+    forall s:slot, 
+    (s = 0 \/ confirm_same_block_pred (s-1)) ->
+    forall n:node, forall lp: LeaderProposalType,
+    is_honest_node n ->
+    certified_blocks n s lp.(lp_round) = Some lp ->
+    forall round':nat, round'>lp.(lp_round) ->
+    forall n': node, is_honest_node n' -> (* saved the ack-witness in round lp_round *)
+    in_committee_for n' s n' ->
+    (forall lp':LeaderProposalType, acknowledged_blocks n' s round' = Some lp' -> lp'.(lp_ap) = lp.(lp_ap)).
+    
 Admitted.
 
 (* proof-chain: enter slot sync -> receive honest winner sync -> ! not required in safety, only required in liveness. *)
@@ -528,6 +543,8 @@ Lemma safety_per_slot_helper:
     (* confirm block -> lp -> 
         early lp -> later honest nodes will not contribute to conflicting lps. 
     *)
+
+    (* n1->block1 apply lemma, to say that every honest ack should be lp1. *)
     inversion H2. 
     assert (exists com:node, is_honest_node com /\ in_committee_for com s n1 /\ let lp1:= block1.(bk_proposal) in certified_blocks com s lp1.(lp_round) = Some lp1).
     apply commit_implies_honest_certify with (s:=s) (n:=n1). auto. auto.
@@ -541,6 +558,7 @@ Lemma safety_per_slot_helper:
 
     destruct H7 as [H7_1 H7_2].
 
+    (* n2->block2. for same slot, h2 cert->h2 acked. lp2=lp1 *)
     inversion H3.
     assert (exists com:node, is_honest_node com /\ in_committee_for com s n2 /\ let lp:= block2.(bk_proposal) in certified_blocks com s lp.(lp_round) = Some lp).
     apply commit_implies_honest_certify with (s:=s) (n:=n2). auto. auto.
@@ -560,20 +578,34 @@ Lemma safety_per_slot_helper:
 
     (* com_node1/2 certs => also acked. *)
 
-    assert(acknowledged_blocks com_node s lp1.(lp_round) = Some lp1).
-    apply honest_cert_implies_honest_ack with (s:=s) (r:=lp1.(lp_round)) (lp:=lp1). auto. auto. auto. auto.
+    (* assert(acknowledged_blocks com_node s lp1.(lp_round) = Some lp1).
+    apply honest_cert_implies_honest_ack with (s:=s) (r:=lp1.(lp_round)) (lp:=lp1). auto. auto. auto. auto. *)
 
     assert(acknowledged_blocks com_node2 s lp2.(lp_round) = Some lp2).
     apply honest_cert_implies_honest_ack with (s:=s) (r:=lp2.(lp_round)) (lp:=lp2). auto. auto. auto. auto.
 
+    specialize H7_2 with (n'':=com_node2).
 
-    specialize (H7_1 com_node H5_1 H8).
-    specialize (H7_2 com_node H8_1 H9).
+    assert (forall lp':LeaderProposalType, acknowledged_blocks com_node2 s lp1.(lp_round) = Some lp' -> lp' = lp1).
+    apply H7_2. auto. auto.
 
-    pose proof H as H'.
-    induction r_gap.
-    (* in the same slot, no-one certifies a different block *)
     
+    destruct_with_eqn r_gap.
+    (* in the same slot, no-one certifies a different block *)
+    assert (lp_round lp2 = lp_round lp1) by lia.
+    pose proof H10 as H10'.
+    rewrite H12 in H10'.
+    apply H11 in H10'.
+    unfold block_equal.
+    unfold fullblock2aggblock.
+    unfold lp1 in H10'.
+    unfold lp2 in H10'.
+    rewrite H10'.
+    auto.
+
+    (* now lp2.round > lp1.round, the argument is, by important lemma, (part1) every honest node locks on lp1.ap before leaving round r. And (part2) no honest node acked other lp.  Then in the next round, no honest node will ack different ap, because another ap does not have witness of enough rank => if new witness is ever formed, must be for the same ap. This should be another big lemma *)
+
+
     
 
 
