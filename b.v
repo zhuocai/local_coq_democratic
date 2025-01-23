@@ -102,16 +102,17 @@ Record AckType: Type := mkAck {
 }.
 
 Record AckProofType: Type := mkAckProof {
-    ap_ap: AggregatedProposalType;
-    ap_acks: set AckType;
+    ackp_ap: AggregatedProposalType;
+    ackp_acks: set AckType;
+    ackp_round: nat; (* all ap_acks.round should be ap_round *)
 }.
 
 Record LeaderProposalType: Type:=
     mkLeaderProposal {
         lp_ap: AggregatedProposalType;
-        lp_proposal: node; 
+        lp_proposer: node; 
         lp_round: nat; 
-        lp_cert: option AckProofType; 
+        lp_cert: option AckProofType; (*previous cert*)
     }.
 
 Record BlameType: Type := mkBlame {
@@ -418,6 +419,21 @@ Hypothesis committee_same_s0:
 (* a leader proposal's witness (f+1 ack) is known by node for slot and round *)
 Variable lp_in_ackproof_node_slot_round: LeaderProposalType->node->slot->nat->Prop. (* form at the end of the round. *)
 
+(* variable determined by state (node, id). defined standalone to facilitate reference*)
+Variable locked_ackproof: 
+    node->slot->nat->option AckProofType.
+
+Lemma locked_ackproof_in_ackproof:
+    forall n:node, forall s:slot, forall r:nat, forall ackp:AckProofType,
+    locked_ackproof n s r = Some ackp -> 
+    exists lp:LeaderProposalType, 
+    lp_in_ackproof_node_slot_round lp n s r /\ lp.(lp_ap) = ackp.(ackp_ap) /\ lp.(lp_round) = ackp.(ackp_round).
+Admitted.
+
+Variable first_rcvd_lp: node->slot->nat->option LeaderProposalType. 
+
+Variable first_recv_lp_time: node->slot->nat->nat. 
+
 
 Lemma block_implies_committee_same_s1:
     forall s:slot, 
@@ -491,10 +507,15 @@ Lemma important_lemma:
     certified_blocks n s lp.(lp_round) = Some lp ->
     (forall n': node, is_honest_node n' -> (* saved the ack-witness in round lp_round *)
     in_committee_for n' s n' ->
-    lp_in_ackproof_node_slot_round lp n' s lp.(lp_round)) /\ (* part 1: every other has ackproof *)
+    exists ackp: AckProofType, locked_ackproof n' s lp.(lp_round) = Some ackp) /\ (* part 1: every other has ackproof *)
     (forall n'':node, is_honest_node n''->
     in_committee_for n'' s n'' ->
     forall lp':LeaderProposalType, acknowledged_blocks n'' s lp.(lp_round) = Some lp'-> lp' = lp).
+
+    intros.
+    (* step 1: cert at t => recv lp at t-2d => others recv lp before t-d, before leaving slot. *)
+    assert (forall other:node, is_honest_node other ->in_committee_for other s other -> first_rcvd_lp other s lp.(lp_round) = Some lp).
+
 Admitted.
 
 Lemma comH_ackproofed_implies_no_conflict_honest_ack:
@@ -518,7 +539,7 @@ Lemma important_lemma_across_rounds:
     forall round':nat, round'>lp.(lp_round) ->
     forall n': node, is_honest_node n' -> (* saved the ack-witness in round lp_round *)
     in_committee_for n' s n' ->
-    (forall lp':LeaderProposalType, acknowledged_blocks n' s round' = Some lp' -> lp'.(lp_ap) = lp.(lp_ap)).
+    (forall lp':LeaderProposalType, acknowledged_blocks n' s round' = Some lp' -> lp'.(lp_ap) = lp.(lp_ap)) /\ (forall lp'':LeaderProposalType, lp_in_ackproof_node_slot_round lp'' n' s round'-> (lp''.(lp_ap) = lp.(lp_ap) \/ lp''.(lp_round) < lp.(lp_round))).
     
 Admitted.
 
@@ -605,19 +626,10 @@ Lemma safety_per_slot_helper:
 
     (* now lp2.round > lp1.round, the argument is, by important lemma, (part1) every honest node locks on lp1.ap before leaving round r. And (part2) no honest node acked other lp.  Then in the next round, no honest node will ack different ap, because another ap does not have witness of enough rank => if new witness is ever formed, must be for the same ap. This should be another big lemma *)
 
+    apply important_lemma_across_rounds with (s:=s) (n:=com_node) (lp:=lp1) (round':=lp2.(lp_round)) in H10. 
+    unfold block_equal. unfold fullblock2aggblock. unfold lp1 in H10. unfold lp2 in H10. auto. 
 
-    
-
-
-
-
-
-
-
-
-
-
-
+    auto. auto. auto. lia. auto. auto.
 Qed.
 
 Lemma safety_per_slot:
